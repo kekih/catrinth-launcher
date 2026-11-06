@@ -303,6 +303,10 @@ impl MinecraftLauncher {
             )),
         }
     }
+
+    pub fn read_log_tail(path: &Path, max_lines: usize) -> String {
+        read_log_tail(path, max_lines)
+    }
 }
 
 pub fn read_log_tail(path: &Path, max_lines: usize) -> String {
