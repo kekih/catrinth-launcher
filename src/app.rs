@@ -2,12 +2,11 @@ use crate::catrinth_api::{CatrinthClient, ModHit};
 use crate::config::LauncherConfig;
 use crate::launcher::{InstalledMod, MinecraftLauncher};
 use crate::theme::{
-    COLOR_BG_CARD, COLOR_BG_INPUT, COLOR_BG_MAIN, COLOR_BG_SURFACE, COLOR_BORDER,
+    COLOR_BG_CARD, COLOR_BG_MAIN, COLOR_BG_SURFACE, COLOR_BORDER,
     COLOR_PRIMARY, COLOR_PRIMARY_HOVER, COLOR_PURPLE, COLOR_TEXT_MUTED, COLOR_TEXT_PRIMARY,
 };
 use eframe::egui;
-use egui::{vec2, Align, Align2, Color32, CornerRadius, Layout, RichText, Stroke, Ui};
-use std::path::Path;
+use egui::{vec2, Align, Color32, Layout, Margin, RichText, Rounding, Stroke, Ui};
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum Tab {
@@ -29,7 +28,6 @@ pub struct CatrinthApp {
     search_query: String,
     search_category: String,
     search_results: Vec<ModHit>,
-    is_searching: bool,
     mod_status_message: Option<(String, bool)>,
 
     // Installed Mods State
@@ -53,7 +51,6 @@ impl CatrinthApp {
             search_query: String::new(),
             search_category: "mod".to_string(),
             search_results: Vec::new(),
-            is_searching: false,
             mod_status_message: None,
             installed_mods: mods,
             status_connection: None,
@@ -92,7 +89,12 @@ impl eframe::App for CatrinthApp {
             .frame(
                 egui::Frame::none()
                     .fill(COLOR_BG_CARD)
-                    .inner_margin(egui::Margin::symmetric(24, 16))
+                    .inner_margin(Margin {
+                        left: 24.0,
+                        right: 24.0,
+                        top: 16.0,
+                        bottom: 16.0,
+                    })
                     .stroke(Stroke::new(1.0, COLOR_BORDER)),
             )
             .show(ctx, |ui| {
@@ -174,7 +176,7 @@ impl eframe::App for CatrinthApp {
             .frame(
                 egui::Frame::none()
                     .fill(COLOR_BG_MAIN)
-                    .inner_margin(egui::Margin::same(24)),
+                    .inner_margin(Margin::same(24.0)),
             )
             .show(ctx, |ui| match self.active_tab {
                 Tab::Play => self.render_play_tab(ui),
@@ -199,7 +201,7 @@ fn tab_button(ui: &mut Ui, label: &str, active: bool, mut on_click: impl FnMut()
             .strong(),
     )
     .fill(bg)
-    .corner_radius(CornerRadius::same(6));
+    .rounding(Rounding::same(6.0));
 
     if ui.add(btn).clicked() {
         on_click();
@@ -216,8 +218,8 @@ impl CatrinthApp {
             egui::Frame::none()
                 .fill(COLOR_BG_CARD)
                 .stroke(Stroke::new(1.0, COLOR_BORDER))
-                .corner_radius(CornerRadius::same(12))
-                .inner_margin(egui::Margin::same(28))
+                .rounding(Rounding::same(12.0))
+                .inner_margin(Margin::same(28.0))
                 .show(ui, |ui| {
                     ui.set_max_width(700.0);
 
@@ -248,7 +250,7 @@ impl CatrinthApp {
                             ui.end_row();
 
                             ui.label(RichText::new("Версия Minecraft:").strong());
-                            egui::ComboBox::from_id_salt("version_select")
+                            egui::ComboBox::from_id_source("version_select")
                                 .selected_text(&self.config.selected_version)
                                 .width(320.0)
                                 .show_ui(ui, |ui| {
@@ -293,7 +295,7 @@ impl CatrinthApp {
                             .strong(),
                     )
                     .fill(COLOR_PRIMARY)
-                    .corner_radius(CornerRadius::same(8))
+                    .rounding(Rounding::same(8.0))
                     .min_size(vec2(340.0, 50.0));
 
                     if ui.add(launch_btn).clicked() {
@@ -327,8 +329,8 @@ impl CatrinthApp {
         egui::Frame::none()
             .fill(COLOR_BG_CARD)
             .stroke(Stroke::new(1.0, COLOR_BORDER))
-            .corner_radius(CornerRadius::same(8))
-            .inner_margin(egui::Margin::same(14))
+            .rounding(Rounding::same(8.0))
+            .inner_margin(Margin::same(14.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("🔍");
@@ -342,7 +344,7 @@ impl CatrinthApp {
                         self.perform_search();
                     }
 
-                    egui::ComboBox::from_id_salt("cat_select")
+                    egui::ComboBox::from_id_source("cat_select")
                         .selected_text(match self.search_category.as_str() {
                             "mod" => "Моды (Forge / Fabric / NeoForge)",
                             "plugin" => "Плагины (Paper / Spigot)",
@@ -387,8 +389,8 @@ impl CatrinthApp {
                 egui::Frame::none()
                     .fill(COLOR_BG_CARD)
                     .stroke(Stroke::new(1.0, COLOR_BORDER))
-                    .corner_radius(CornerRadius::same(8))
-                    .inner_margin(egui::Margin::same(16))
+                    .rounding(Rounding::same(8.0))
+                    .inner_margin(Margin::same(16.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
@@ -421,7 +423,7 @@ impl CatrinthApp {
                                         .strong()
                                 )
                                 .fill(COLOR_PRIMARY)
-                                .corner_radius(CornerRadius::same(6));
+                                .rounding(Rounding::same(6.0));
 
                                 if ui.add(download_btn).clicked() {
                                     self.download_mod_action(hit);
@@ -478,8 +480,8 @@ impl CatrinthApp {
         egui::Frame::none()
             .fill(COLOR_BG_CARD)
             .stroke(Stroke::new(1.0, COLOR_BORDER))
-            .corner_radius(CornerRadius::same(8))
-            .inner_margin(egui::Margin::same(14))
+            .rounding(Rounding::same(8.0))
+            .inner_margin(Margin::same(14.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("Установленные моды: {}", self.installed_mods.len())).size(15.0).strong());
@@ -518,8 +520,13 @@ impl CatrinthApp {
                 egui::Frame::none()
                     .fill(COLOR_BG_CARD)
                     .stroke(Stroke::new(1.0, COLOR_BORDER))
-                    .corner_radius(CornerRadius::same(6))
-                    .inner_margin(egui::Margin::symmetric(14, 10))
+                    .rounding(Rounding::same(6.0))
+                    .inner_margin(Margin {
+                        left: 14.0,
+                        right: 14.0,
+                        top: 10.0,
+                        bottom: 10.0,
+                    })
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("📄");
@@ -553,8 +560,8 @@ impl CatrinthApp {
             egui::Frame::none()
                 .fill(COLOR_BG_CARD)
                 .stroke(Stroke::new(1.0, COLOR_BORDER))
-                .corner_radius(CornerRadius::same(12))
-                .inner_margin(egui::Margin::same(24))
+                .rounding(Rounding::same(12.0))
+                .inner_margin(Margin::same(24.0))
                 .show(ui, |ui| {
                     ui.label(RichText::new("Настройки Catrinth Launcher").size(20.0).strong());
                     ui.add_space(14.0);
@@ -649,7 +656,7 @@ impl CatrinthApp {
                     if ui.add(
                         egui::Button::new(RichText::new("💾 Сохранить настройки").size(14.0).strong())
                             .fill(COLOR_PRIMARY)
-                            .corner_radius(CornerRadius::same(6))
+                            .rounding(Rounding::same(6.0))
                             .min_size(vec2(200.0, 36.0))
                     ).clicked() {
                         let _ = self.config.save();
