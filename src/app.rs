@@ -1,7 +1,8 @@
 use crate::catrinth_api::{CatrinthClient, ModHit};
 use crate::config::LauncherConfig;
-use crate::java_manager::JavaManager;
+use crate::java_manager::{JavaManager, ALL_TEMURIN_VERSIONS};
 use crate::launcher::{InstalledMod, MinecraftLauncher};
+use crate::mod_loaders::{self, get_default_versions, ModLoaderType, ParsedVersion};
 use crate::mojang_api::{DownloadProgress, MojangClient, VersionManifest};
 use crate::theme::{
     COLOR_BG_CARD, COLOR_BG_MAIN, COLOR_BG_SIDEBAR, COLOR_BG_SURFACE, COLOR_BORDER,
@@ -36,6 +37,7 @@ pub struct CatrinthApp {
 
     // Play Tab State
     available_versions: Vec<String>,
+    loader_filter: ModLoaderType,
     show_snapshots: bool,
     status_message: Option<(String, bool)>, // (msg, is_error)
 
@@ -66,18 +68,16 @@ pub struct CatrinthApp {
 
 impl CatrinthApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        let config = LauncherConfig::load();
+        let mut config = LauncherConfig::load();
         let mut versions = MinecraftLauncher::get_installed_versions(&config);
-        if versions.is_empty() {
-            versions = vec![
-                "1.21.1".to_string(),
-                "1.20.4".to_string(),
-                "1.20.1".to_string(),
-                "1.19.4".to_string(),
-                "1.18.2".to_string(),
-                "1.16.5".to_string(),
-                "1.12.2".to_string(),
-            ];
+        for def in get_default_versions() {
+            if !versions.contains(&def) {
+                versions.push(def);
+            }
+        }
+
+        if config.selected_version.is_empty() {
+            config.selected_version = "1.21.1 (Fabric)".to_string();
         }
 
         let mods = MinecraftLauncher::get_installed_mods(&config);
@@ -99,6 +99,7 @@ impl CatrinthApp {
             config,
             active_tab: Tab::Play,
             available_versions: versions,
+            loader_filter: ModLoaderType::All,
             show_snapshots: false,
             status_message: None,
             running_game: None,
@@ -121,30 +122,20 @@ impl CatrinthApp {
     }
 
     fn apply_version_manifest(&mut self, manifest: &VersionManifest) {
-        let mut list = Vec::new();
+        let mut list = self.available_versions.clone();
 
-        // 1. Locally installed versions always first
-        let installed = MinecraftLauncher::get_installed_versions(&self.config);
-        for v in &installed {
-            if !list.contains(v) {
-                list.push(v.clone());
-            }
-        }
-
-        // 2. Official release versions from Mojang manifest
         for v in &manifest.versions {
             if v.version_type == "release"
                 || (self.show_snapshots && v.version_type == "snapshot")
             {
-                if !list.contains(&v.id) {
-                    list.push(v.id.clone());
+                let v_name = format!("{} (Vanilla)", v.id);
+                if !list.contains(&v_name) && !list.contains(&v.id) {
+                    list.push(v_name);
                 }
             }
         }
 
-        if !list.is_empty() {
-            self.available_versions = list;
-        }
+        self.available_versions = list;
     }
 
     fn perform_search(&mut self) {
@@ -185,13 +176,20 @@ impl CatrinthApp {
             };
         }
 
+        let config_clone = self.config.clone();
+
         thread::spawn(move || {
             match JavaManager::download_and_install_temurin(major_version, progress_arc.clone()) {
-                Ok(_java_path) => {
+                Ok(java_path) => {
                     let mut p = progress_arc.lock().unwrap();
-                    p.stage = format!("Eclipse Temurin JRE {} успешно установлена!", major_version);
+                    p.stage = format!("Eclipse Temurin Java {} успешно установлена!", major_version);
                     p.percent = 1.0;
                     p.is_done = true;
+
+                    // Automatically set newly installed Java as configured path if current is empty or not found
+                    let mut cfg = config_clone;
+                    cfg.java_path = java_path.to_string_lossy().to_string();
+                    let _ = cfg.save();
                 }
                 Err(e) => {
                     let mut p = progress_arc.lock().unwrap();
@@ -211,7 +209,7 @@ impl CatrinthApp {
         {
             let mut p = progress_arc.lock().unwrap();
             *p = DownloadProgress {
-                stage: format!("Подготовка к установке Minecraft {}...", version),
+                stage: format!("Подготовка к установке {}...", version),
                 current: 0,
                 total: 0,
                 percent: 0.05,
@@ -224,6 +222,7 @@ impl CatrinthApp {
         let config_clone = self.config.clone();
 
         thread::spawn(move || {
+            let parsed = ParsedVersion::parse(&version);
             let game_dir = PathBuf::from(&config_clone.game_dir);
             let mojang = MojangClient::new();
 
@@ -239,15 +238,15 @@ impl CatrinthApp {
                 }
             };
 
-            // 2. Version Details
+            // 2. Fetch base vanilla version details
             {
                 let mut p = progress_arc.lock().unwrap();
-                p.stage = format!("Загрузка спецификации версии {}...", version);
+                p.stage = format!("Загрузка спецификации Minecraft {}...", parsed.game_version);
                 p.percent = 0.10;
             }
             ctx.request_repaint();
 
-            let details = match mojang.fetch_version_details(&game_dir, &manifest, &version) {
+            let details = match mojang.fetch_version_details(&game_dir, &manifest, &parsed.game_version) {
                 Ok(d) => d,
                 Err(e) => {
                     let mut p = progress_arc.lock().unwrap();
@@ -285,10 +284,40 @@ impl CatrinthApp {
                 return;
             }
 
-            // 6. Launch!
+            // 6. Fabric loader installation if Fabric selected
+            if parsed.loader == ModLoaderType::Fabric {
+                if let Err(e) = mod_loaders::install_fabric(&parsed.game_version, &config_clone.game_dir, Arc::clone(&progress_arc)) {
+                    let mut p = progress_arc.lock().unwrap();
+                    p.error = Some(format!("Ошибка установки Fabric: {}", e));
+                    p.is_done = true;
+                    ctx.request_repaint();
+                    return;
+                }
+            }
+
+            // 7. Forge loader installation if Forge selected
+            if parsed.loader == ModLoaderType::Forge {
+                if let Some(bin) = JavaManager::find_best_java_for_minecraft(&config_clone.java_path, &parsed.game_version) {
+                    if let Err(e) = mod_loaders::install_forge(&parsed.game_version, &config_clone.game_dir, &bin, Arc::clone(&progress_arc)) {
+                        let mut p = progress_arc.lock().unwrap();
+                        p.error = Some(format!("Ошибка установки Forge: {}", e));
+                        p.is_done = true;
+                        ctx.request_repaint();
+                        return;
+                    }
+                } else {
+                    let mut p = progress_arc.lock().unwrap();
+                    p.error = Some("Для установки Forge необходима Java! Перейдите во вкладку Java Runtimes и установите Java 21 или Java 17.".to_string());
+                    p.is_done = true;
+                    ctx.request_repaint();
+                    return;
+                }
+            }
+
+            // 8. Launch!
             {
                 let mut p = progress_arc.lock().unwrap();
-                p.stage = "Все файлы проверены! Запуск Minecraft...".to_string();
+                p.stage = format!("Все файлы {} проверены! Запуск...", version);
                 p.percent = 1.0;
             }
             ctx.request_repaint();
@@ -609,30 +638,80 @@ impl CatrinthApp {
                         );
                         ui.end_row();
 
-                        ui.label(RichText::new("Версия Minecraft:").strong());
+                        ui.label(RichText::new("Загрузчик модов:").strong());
                         ui.horizontal(|ui| {
-                            egui::ComboBox::from_id_source("version_select_dropdown")
-                                .selected_text(&self.config.selected_version)
-                                .width(240.0)
-                                .show_ui(ui, |ui| {
-                                    for v in &self.available_versions {
-                                        let tag = if MinecraftLauncher::is_version_installed(&self.config, v) {
-                                            " [Установлена]"
-                                        } else {
-                                            ""
-                                        };
-                                        ui.selectable_value(
-                                            &mut self.config.selected_version,
-                                            v.clone(),
-                                            format!("{}{}", v, tag),
-                                        );
-                                    }
-                                });
+                            for filter in [
+                                ModLoaderType::All,
+                                ModLoaderType::Fabric,
+                                ModLoaderType::Forge,
+                                ModLoaderType::Vanilla,
+                            ] {
+                                let is_active = self.loader_filter == filter;
+                                let btn = egui::Button::new(format!("{} {}", filter.icon(), filter.label()))
+                                    .fill(if is_active { COLOR_PRIMARY } else { COLOR_BG_SURFACE })
+                                    .rounding(Rounding::same(6.0));
+                                if ui.add(btn).clicked() {
+                                    self.loader_filter = filter;
+                                }
+                            }
+                        });
+                        ui.end_row();
 
-                            if is_installed {
-                                ui.label(RichText::new("✅ Готова").color(COLOR_PRIMARY).size(12.0));
-                            } else {
-                                ui.label(RichText::new("⬇ Не скачана").color(COLOR_PURPLE).size(12.0));
+                        ui.label(RichText::new("Версия Minecraft:").strong());
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                egui::ComboBox::from_id_source("version_select_dropdown")
+                                    .selected_text(&self.config.selected_version)
+                                    .width(280.0)
+                                    .show_ui(ui, |ui| {
+                                        let filtered_versions: Vec<String> = self
+                                            .available_versions
+                                            .iter()
+                                            .filter(|v| {
+                                                let p = ParsedVersion::parse(v);
+                                                match self.loader_filter {
+                                                    ModLoaderType::All => true,
+                                                    ModLoaderType::Fabric => p.loader == ModLoaderType::Fabric,
+                                                    ModLoaderType::Forge => p.loader == ModLoaderType::Forge,
+                                                    ModLoaderType::Vanilla => p.loader == ModLoaderType::Vanilla,
+                                                }
+                                            })
+                                            .cloned()
+                                            .collect();
+
+                                        for v in &filtered_versions {
+                                            let tag = if MinecraftLauncher::is_version_installed(&self.config, v) {
+                                                " [Установлена]"
+                                            } else {
+                                                ""
+                                            };
+                                            ui.selectable_value(
+                                                &mut self.config.selected_version,
+                                                v.clone(),
+                                                format!("{}{}", v, tag),
+                                            );
+                                        }
+                                    });
+
+                                if is_installed {
+                                    ui.label(RichText::new("✅ Готова к игре").color(COLOR_PRIMARY).size(12.0));
+                                } else {
+                                    ui.label(RichText::new("⬇ Не установлена").color(COLOR_PURPLE).size(12.0));
+                                }
+                            });
+
+                            let parsed = ParsedVersion::parse(&self.config.selected_version);
+                            ui.add_space(2.0);
+                            match parsed.loader {
+                                ModLoaderType::Fabric => {
+                                    ui.label(RichText::new("🟣 Загрузчик Fabric: быстрая загрузка и поддержка модов Fabric").color(COLOR_PURPLE).size(11.0));
+                                }
+                                ModLoaderType::Forge => {
+                                    ui.label(RichText::new("🟠 Загрузчик Forge: классический загрузчик для сборок и модов Forge").color(Color32::from_rgb(251, 146, 60)).size(11.0));
+                                }
+                                ModLoaderType::Vanilla | ModLoaderType::All => {
+                                    ui.label(RichText::new("🟢 Ванильный Minecraft: официальный чистый релиз Mojang").color(COLOR_PRIMARY).size(11.0));
+                                }
                             }
                         });
                         ui.end_row();
@@ -879,161 +958,75 @@ impl CatrinthApp {
 
         ui.add_space(16.0);
 
-        // Eclipse Temurin 21 Card (Recommended)
-        let has_temurin_21 = JavaManager::is_temurin_installed(21);
-        egui::Frame::none()
-            .fill(COLOR_BG_CARD)
-            .stroke(Stroke::new(1.0_f32, if has_temurin_21 { COLOR_PRIMARY } else { COLOR_BORDER }))
-            .rounding(Rounding::same(10.0))
-            .inner_margin(Margin::same(20.0))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for info in ALL_TEMURIN_VERSIONS {
+                let has_temurin = JavaManager::is_temurin_installed(info.version);
+                let is_active = if let Some(bin) = JavaManager::get_temurin_java_bin(info.version) {
+                    self.config.java_path == bin.to_string_lossy().to_string()
+                } else {
+                    false
+                };
+
+                egui::Frame::none()
+                    .fill(COLOR_BG_CARD)
+                    .stroke(Stroke::new(1.0_f32, if is_active || has_temurin { COLOR_PRIMARY } else { COLOR_BORDER }))
+                    .rounding(Rounding::same(10.0))
+                    .inner_margin(Margin::same(18.0))
+                    .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("Eclipse Temurin 21 (LTS)").size(17.0).strong());
-                            ui.label(RichText::new("[РЕКОМЕНДУЕТСЯ]").color(COLOR_PRIMARY).size(11.0).strong());
-                            if has_temurin_21 {
-                                ui.label(RichText::new("✅ Установлена в runtime/temurin-21").color(COLOR_PRIMARY).size(12.0));
-                            }
-                        });
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new("Необходима для Minecraft 1.20.5+ и 1.21+. Обеспечивает максимальную производительность сборщика мусора G1GC.")
-                                .color(COLOR_TEXT_MUTED)
-                                .size(13.0),
-                        );
-                    });
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(info.title).size(16.0).strong());
+                                    ui.label(RichText::new(format!("[{}]", info.tag)).color(COLOR_PRIMARY).size(11.0).strong());
+                                    if is_active {
+                                        ui.label(RichText::new("★ АКТИВНАЯ").color(COLOR_PRIMARY).size(11.0).strong());
+                                    } else if has_temurin {
+                                        ui.label(RichText::new(format!("✅ Установлена в runtime/temurin-{}", info.version)).color(COLOR_PRIMARY).size(11.0));
+                                    }
+                                });
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new(info.description)
+                                        .color(COLOR_TEXT_MUTED)
+                                        .size(12.0),
+                                );
+                            });
 
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if has_temurin_21 {
-                            let btn = egui::Button::new("Использовать эту Java").rounding(Rounding::same(6.0));
-                            if ui.add(btn).clicked() {
-                                if let Some(bin) = JavaManager::get_temurin_java_bin(21) {
-                                    self.config.java_path = bin.to_string_lossy().to_string();
-                                    let _ = self.config.save();
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if has_temurin {
+                                    if !is_active {
+                                        let btn = egui::Button::new("Использовать эту Java").rounding(Rounding::same(6.0));
+                                        if ui.add(btn).clicked() {
+                                            if let Some(bin) = JavaManager::get_temurin_java_bin(info.version) {
+                                                self.config.java_path = bin.to_string_lossy().to_string();
+                                                let _ = self.config.save();
+                                            }
+                                        }
+                                    } else {
+                                        ui.label(RichText::new("Выбрана").color(COLOR_PRIMARY).strong());
+                                    }
+                                } else {
+                                    let is_highlight = info.version == 25 || info.version == 21;
+                                    let btn = egui::Button::new(
+                                        RichText::new(format!("⬇ Установить Java {}", info.version))
+                                            .color(if is_highlight { Color32::from_rgb(11, 14, 20) } else { COLOR_TEXT_PRIMARY })
+                                            .strong(),
+                                    )
+                                    .fill(if is_highlight { COLOR_PRIMARY } else { COLOR_BG_SURFACE })
+                                    .rounding(Rounding::same(6.0))
+                                    .min_size(vec2(180.0, 36.0));
+
+                                    if ui.add(btn).clicked() && !self.is_installing_java {
+                                        self.start_install_java(info.version, ctx.clone());
+                                    }
                                 }
-                            }
-                        } else {
-                            let btn = egui::Button::new(
-                                RichText::new("⬇ Установить Java 21")
-                                    .color(Color32::from_rgb(11, 14, 20))
-                                    .strong(),
-                            )
-                            .fill(COLOR_PRIMARY)
-                            .rounding(Rounding::same(6.0))
-                            .min_size(vec2(180.0, 36.0));
-
-                            if ui.add(btn).clicked() && !self.is_installing_java {
-                                self.start_install_java(21, ctx.clone());
-                            }
-                        }
-                    });
-                });
-            });
-
-        ui.add_space(12.0);
-
-        // Eclipse Temurin 17 Card
-        let has_temurin_17 = JavaManager::is_temurin_installed(17);
-        egui::Frame::none()
-            .fill(COLOR_BG_CARD)
-            .stroke(Stroke::new(1.0_f32, if has_temurin_17 { COLOR_PRIMARY } else { COLOR_BORDER }))
-            .rounding(Rounding::same(10.0))
-            .inner_margin(Margin::same(20.0))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("Eclipse Temurin 17 (LTS)").size(17.0).strong());
-                            if has_temurin_17 {
-                                ui.label(RichText::new("✅ Установлена в runtime/temurin-17").color(COLOR_PRIMARY).size(12.0));
-                            }
+                            });
                         });
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new("Для Minecraft версий 1.17 – 1.20.4.")
-                                .color(COLOR_TEXT_MUTED)
-                                .size(13.0),
-                        );
                     });
 
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if has_temurin_17 {
-                            let btn = egui::Button::new("Использовать эту Java").rounding(Rounding::same(6.0));
-                            if ui.add(btn).clicked() {
-                                if let Some(bin) = JavaManager::get_temurin_java_bin(17) {
-                                    self.config.java_path = bin.to_string_lossy().to_string();
-                                    let _ = self.config.save();
-                                }
-                            }
-                        } else {
-                            let btn = egui::Button::new(
-                                RichText::new("⬇ Установить Java 17")
-                                    .color(COLOR_TEXT_PRIMARY),
-                            )
-                            .fill(COLOR_BG_SURFACE)
-                            .rounding(Rounding::same(6.0))
-                            .min_size(vec2(180.0, 36.0));
-
-                            if ui.add(btn).clicked() && !self.is_installing_java {
-                                self.start_install_java(17, ctx.clone());
-                            }
-                        }
-                    });
-                });
-            });
-
-        ui.add_space(12.0);
-
-        // Eclipse Temurin 8 Card
-        let has_temurin_8 = JavaManager::is_temurin_installed(8);
-        egui::Frame::none()
-            .fill(COLOR_BG_CARD)
-            .stroke(Stroke::new(1.0_f32, if has_temurin_8 { COLOR_PRIMARY } else { COLOR_BORDER }))
-            .rounding(Rounding::same(10.0))
-            .inner_margin(Margin::same(20.0))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("Eclipse Temurin 8").size(17.0).strong());
-                            if has_temurin_8 {
-                                ui.label(RichText::new("✅ Установлена в runtime/temurin-8").color(COLOR_PRIMARY).size(12.0));
-                            }
-                        });
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new("Для старых версий игры Minecraft 1.12.2, 1.7.10 и др.")
-                                .color(COLOR_TEXT_MUTED)
-                                .size(13.0),
-                        );
-                    });
-
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if has_temurin_8 {
-                            let btn = egui::Button::new("Использовать эту Java").rounding(Rounding::same(6.0));
-                            if ui.add(btn).clicked() {
-                                if let Some(bin) = JavaManager::get_temurin_java_bin(8) {
-                                    self.config.java_path = bin.to_string_lossy().to_string();
-                                    let _ = self.config.save();
-                                }
-                            }
-                        } else {
-                            let btn = egui::Button::new(
-                                RichText::new("⬇ Установить Java 8")
-                                    .color(COLOR_TEXT_PRIMARY),
-                            )
-                            .fill(COLOR_BG_SURFACE)
-                            .rounding(Rounding::same(6.0))
-                            .min_size(vec2(180.0, 36.0));
-
-                            if ui.add(btn).clicked() && !self.is_installing_java {
-                                self.start_install_java(8, ctx.clone());
-                            }
-                        }
-                    });
-                });
-            });
+                ui.add_space(10.0);
+            }
+        });
     }
 
     // ------------------------------------------------------------------------

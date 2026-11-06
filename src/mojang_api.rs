@@ -40,6 +40,8 @@ pub struct ManifestVersion {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionDetails {
     pub id: String,
+    #[serde(rename = "inheritsFrom")]
+    pub inherits_from: Option<String>,
     #[serde(rename = "mainClass")]
     pub main_class: Option<String>,
     #[serde(rename = "assetIndex")]
@@ -95,6 +97,7 @@ pub struct DownloadFile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Library {
     pub name: String,
+    pub url: Option<String>,
     pub downloads: Option<LibraryDownloads>,
     pub rules: Option<Vec<Rule>>,
     pub natives: Option<HashMap<String, String>>,

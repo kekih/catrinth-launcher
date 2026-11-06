@@ -6,6 +6,65 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[derive(Debug, Clone)]
+pub struct TemurinVersionInfo {
+    pub version: u32,
+    pub title: &'static str,
+    pub tag: &'static str,
+    pub description: &'static str,
+}
+
+pub const ALL_TEMURIN_VERSIONS: &[TemurinVersionInfo] = &[
+    TemurinVersionInfo {
+        version: 25,
+        title: "Eclipse Temurin 25 (JDK / Next-Gen)",
+        tag: "LATEST / NEXT-GEN",
+        description: "Новейшая версия OpenJDK 25. Подходит для Minecraft 1.21+ и Fabric. Новейшие оптимизации ZGC, генеративный JIT.",
+    },
+    TemurinVersionInfo {
+        version: 24,
+        title: "Eclipse Temurin 24",
+        tag: "FEATURE",
+        description: "Современная версия Java 24 для Minecraft 1.21+ с обновленными стандартами JVM.",
+    },
+    TemurinVersionInfo {
+        version: 23,
+        title: "Eclipse Temurin 23",
+        tag: "FEATURE",
+        description: "Java 23 с расширенным ZGC и высокой скоростью отклика.",
+    },
+    TemurinVersionInfo {
+        version: 22,
+        title: "Eclipse Temurin 22",
+        tag: "FEATURE",
+        description: "Стабильный релиз Java 22.",
+    },
+    TemurinVersionInfo {
+        version: 21,
+        title: "Eclipse Temurin 21 (LTS)",
+        tag: "РЕКОМЕНДУЕТСЯ (LTS)",
+        description: "Официальный стандарт для Minecraft 1.20.5+ и 1.21+. Долгосрочная поддержка (LTS), максимальная стабильность сборщика мусора G1GC.",
+    },
+    TemurinVersionInfo {
+        version: 17,
+        title: "Eclipse Temurin 17 (LTS)",
+        tag: "LTS",
+        description: "Необходима для Minecraft версий 1.17 – 1.20.4, а также Forge и Fabric для этих версий.",
+    },
+    TemurinVersionInfo {
+        version: 11,
+        title: "Eclipse Temurin 11 (LTS)",
+        tag: "LTS",
+        description: "Долгосрочный релиз Java 11 для промежуточных сборок и серверных плагинов.",
+    },
+    TemurinVersionInfo {
+        version: 8,
+        title: "Eclipse Temurin 8 (LTS)",
+        tag: "LTS / КЛАССИКА",
+        description: "Необходима для классических версий Minecraft 1.12.2, 1.7.10 и старых сборок Forge.",
+    },
+];
+
 pub struct JavaManager;
 
 impl JavaManager {
@@ -43,29 +102,30 @@ impl JavaManager {
             }
         }
 
-        // Determine recommended Java version based on Minecraft version:
-        // Minecraft 1.20.5+ -> Java 21
-        // Minecraft 1.17 - 1.20.4 -> Java 17
-        // Minecraft <= 1.16.5 -> Java 8 or 17
-        let need_version = if mc_version.starts_with("1.21") || mc_version.starts_with("1.20.5") || mc_version.starts_with("1.20.6") {
-            21
+        // Determine candidate Java versions based on Minecraft version:
+        // Minecraft 1.20.5+ / 1.21+ -> Java 21, 25, 24, 23, 22
+        // Minecraft 1.17 - 1.20.4 -> Java 17, 21, 25
+        // Minecraft <= 1.16.5 -> Java 8, 17
+        let candidates: &[u32] = if mc_version.starts_with("1.21") || mc_version.starts_with("1.20.5") || mc_version.starts_with("1.20.6") {
+            &[21, 25, 24, 23, 22]
         } else if mc_version.starts_with("1.20") || mc_version.starts_with("1.19") || mc_version.starts_with("1.18") || mc_version.starts_with("1.17") {
-            17
+            &[17, 21, 25]
         } else {
-            21 // Default to 21 for modern launcher
+            &[8, 17, 21]
         };
 
-        // Check local Temurin runtime
-        if let Some(bin) = Self::get_temurin_java_bin(need_version) {
-            return Some(bin);
-        }
-        if need_version != 21 {
-            if let Some(bin) = Self::get_temurin_java_bin(21) {
+        // Check local Temurin runtime in candidate order
+        for &ver in candidates {
+            if let Some(bin) = Self::get_temurin_java_bin(ver) {
                 return Some(bin);
             }
         }
-        if let Some(bin) = Self::get_temurin_java_bin(17) {
-            return Some(bin);
+
+        // Check any installed Temurin version as fallback
+        for info in ALL_TEMURIN_VERSIONS {
+            if let Some(bin) = Self::get_temurin_java_bin(info.version) {
+                return Some(bin);
+            }
         }
 
         // Check system PATH
@@ -122,12 +182,6 @@ impl JavaManager {
             "linux"
         };
 
-        // Adoptium binary direct redirect URL
-        let download_url = format!(
-            "https://api.adoptium.net/v3/binary/latest/{}/ga/{}/x64/jre/hotspot/normal/eclipse",
-            major_version, os_slug
-        );
-
         let target_dir = Self::get_temurin_dir(major_version);
         let _ = fs::create_dir_all(&target_dir);
 
@@ -147,10 +201,25 @@ impl JavaManager {
             .build()
             .unwrap_or_default();
 
-        let mut resp = client
-            .get(&download_url)
-            .send()
-            .map_err(|e| format!("Не удалось скачать Eclipse Temurin Java {}: {}", major_version, e))?;
+        // 1. Try JRE first
+        let jre_url = format!(
+            "https://api.adoptium.net/v3/binary/latest/{}/ga/{}/x64/jre/hotspot/normal/eclipse",
+            major_version, os_slug
+        );
+        let jdk_url = format!(
+            "https://api.adoptium.net/v3/binary/latest/{}/ga/{}/x64/jdk/hotspot/normal/eclipse",
+            major_version, os_slug
+        );
+
+        let mut resp = match client.get(&jre_url).send() {
+            Ok(r) if r.status().is_success() => r,
+            _ => {
+                // Fallback to JDK
+                client.get(&jdk_url).send().map_err(|e| {
+                    format!("Не удалось скачать Eclipse Temurin Java {}: {}", major_version, e)
+                })?
+            }
+        };
 
         if !resp.status().is_success() {
             return Err(format!(
@@ -187,7 +256,7 @@ impl JavaManager {
                 let mut p = progress.lock().unwrap();
                 p.percent = 0.05 + 0.80 * frac;
                 p.stage = format!(
-                    "Скачивание Eclipse Temurin JRE {}: {:.1} / {:.1} МБ ({}%)",
+                    "Скачивание Eclipse Temurin Java {}: {:.1} / {:.1} МБ ({}%)",
                     major_version,
                     mb_done,
                     mb_total,
@@ -200,7 +269,7 @@ impl JavaManager {
 
         {
             let mut p = progress.lock().unwrap();
-            p.stage = format!("Распаковка Eclipse Temurin JRE {}...", major_version);
+            p.stage = format!("Распаковка Eclipse Temurin Java {}...", major_version);
             p.percent = 0.88;
         }
 
@@ -219,7 +288,7 @@ impl JavaManager {
                     None => continue,
                 };
 
-                // Strip top-level directory (e.g. jdk-21.0.13+9-jre/)
+                // Strip top-level directory (e.g. jdk-25.0.5+8/)
                 let components: Vec<_> = raw_path.components().collect();
                 let rel_path = if components.len() > 1 {
                     components[1..].iter().collect::<PathBuf>()
@@ -270,7 +339,7 @@ impl JavaManager {
 
         {
             let mut p = progress.lock().unwrap();
-            p.stage = format!("Eclipse Temurin JRE {} успешно установлена!", major_version);
+            p.stage = format!("Eclipse Temurin Java {} успешно установлена!", major_version);
             p.percent = 1.0;
             p.is_done = true;
         }

@@ -1,7 +1,8 @@
 use crate::config::LauncherConfig;
 use crate::java_manager::JavaManager;
+use crate::mod_loaders::{maven_coord_to_path, ParsedVersion};
 use crate::mojang_api::{
-    extract_arg_values, is_allowed_by_rules, is_arg_allowed, offline_player_uuid, VersionDetails,
+    extract_arg_values, is_allowed_by_rules, is_arg_allowed, offline_player_uuid, Library, VersionDetails,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,8 +28,8 @@ impl MinecraftLauncher {
                     if let Ok(file_type) = entry.file_type() {
                         if file_type.is_dir() {
                             let name = entry.file_name().to_string_lossy().to_string();
-                            let jar_path = entry.path().join(format!("{}.jar", name));
-                            if jar_path.exists() {
+                            let json_path = entry.path().join(format!("{}.json", name));
+                            if json_path.exists() {
                                 versions.push(name);
                             }
                         }
@@ -42,11 +43,51 @@ impl MinecraftLauncher {
         versions
     }
 
-    pub fn is_version_installed(config: &LauncherConfig, version: &str) -> bool {
-        let v_dir = config.versions_dir().join(version);
-        let jar = v_dir.join(format!("{}.jar", version));
-        let json = v_dir.join(format!("{}.json", version));
-        jar.exists() && json.exists()
+    pub fn is_version_installed(config: &LauncherConfig, version_str: &str) -> bool {
+        let parsed = ParsedVersion::parse(version_str);
+        let versions_dir = config.versions_dir();
+
+        let candidate_names = [
+            parsed.target_folder_name.clone(),
+            version_str.to_string(),
+            parsed.game_version.clone(),
+        ];
+
+        for name in &candidate_names {
+            let v_dir = versions_dir.join(name);
+            let json = v_dir.join(format!("{}.json", name));
+            let jar = v_dir.join(format!("{}.jar", name));
+
+            if json.exists() {
+                if jar.exists() {
+                    return true;
+                }
+                // Check if parent jar exists
+                let parent_jar = versions_dir.join(&parsed.game_version).join(format!("{}.jar", parsed.game_version));
+                if parent_jar.exists() {
+                    return true;
+                }
+            }
+        }
+
+        // Fuzzy match for forge (e.g. "1.20.1-forge-47.3.0" for "1.20.1 (Forge)")
+        if let Ok(entries) = fs::read_dir(&versions_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.contains(&parsed.game_version) {
+                    if (parsed.raw.contains("Forge") && (name.contains("forge") || name.contains("Forge")))
+                        || (parsed.raw.contains("Fabric") && (name.contains("fabric") || name.contains("Fabric")))
+                    {
+                        let json = entry.path().join(format!("{}.json", name));
+                        if json.exists() {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        false
     }
 
     pub fn get_installed_mods(config: &LauncherConfig) -> Vec<InstalledMod> {
@@ -78,29 +119,97 @@ impl MinecraftLauncher {
     }
 
     pub fn launch(config: &LauncherConfig, version: &str) -> Result<(Child, PathBuf, String), String> {
+        let parsed = ParsedVersion::parse(version);
         let versions_dir = config.versions_dir();
-        let v_dir = versions_dir.join(version);
-        let jar_path = v_dir.join(format!("{}.jar", version));
-        let json_path = v_dir.join(format!("{}.json", version));
 
-        if !jar_path.exists() || !json_path.exists() {
-            return Err(format!(
-                "Версия {} не установлена! Нажмите кнопку «Скачать и запустить Minecraft».",
-                version
-            ));
+        // 1. Locate version folder & JSON file
+        let mut target_dir = versions_dir.join(&parsed.target_folder_name);
+        let mut target_json = target_dir.join(format!("{}.json", parsed.target_folder_name));
+        let mut actual_id = parsed.target_folder_name.clone();
+
+        if !target_json.exists() {
+            let direct = versions_dir.join(version);
+            let direct_json = direct.join(format!("{}.json", version));
+            if direct_json.exists() {
+                target_dir = direct;
+                target_json = direct_json;
+                actual_id = version.to_string();
+            } else if let Ok(entries) = fs::read_dir(&versions_dir) {
+                // Search for fuzzy match
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.contains(&parsed.game_version) {
+                        if (parsed.raw.contains("Forge") && (name.contains("forge") || name.contains("Forge")))
+                            || (parsed.raw.contains("Fabric") && (name.contains("fabric") || name.contains("Fabric")))
+                        {
+                            let candidate_json = entry.path().join(format!("{}.json", name));
+                            if candidate_json.exists() {
+                                target_dir = entry.path();
+                                target_json = candidate_json;
+                                actual_id = name;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        // Parse version details JSON
-        let json_content = fs::read_to_string(&json_path)
-            .map_err(|e| format!("Не удалось прочитать {}: {}", json_path.display(), e))?;
-        let details: VersionDetails = serde_json::from_str(&json_content)
-            .map_err(|e| format!("Ошибка парсинга версии {}: {}", version, e))?;
+        if !target_json.exists() {
+            // Fallback to game_version directory
+            let gv_dir = versions_dir.join(&parsed.game_version);
+            let gv_json = gv_dir.join(format!("{}.json", parsed.game_version));
+            if gv_json.exists() {
+                target_dir = gv_dir;
+                target_json = gv_json;
+                actual_id = parsed.game_version.clone();
+            } else {
+                return Err(format!(
+                    "Версия {} не установлена! Нажмите кнопку «Скачать и запустить Minecraft».",
+                    version
+                ));
+            }
+        }
 
-        // 1. Locate Java executable (prefers Eclipse Temurin)
-        let java_bin = JavaManager::find_best_java_for_minecraft(&config.java_path, version).ok_or_else(|| {
+        // Parse target version details JSON
+        let json_content = fs::read_to_string(&target_json)
+            .map_err(|e| format!("Не удалось прочитать {}: {}", target_json.display(), e))?;
+        let details: VersionDetails = serde_json::from_str(&json_content)
+            .map_err(|e| format!("Ошибка парсинга версии {}: {}", actual_id, e))?;
+
+        // Parent details if version inheritsFrom another version (like Fabric or Forge)
+        let parent_details: Option<VersionDetails> = if let Some(ref parent_name) = details.inherits_from {
+            let parent_json = versions_dir.join(parent_name).join(format!("{}.json", parent_name));
+            if let Ok(content) = fs::read_to_string(&parent_json) {
+                serde_json::from_str(&content).ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Determine client jar path
+        let mut jar_path = target_dir.join(format!("{}.jar", actual_id));
+        if !jar_path.exists() {
+            if let Some(ref p) = details.inherits_from {
+                let p_jar = versions_dir.join(p).join(format!("{}.jar", p));
+                if p_jar.exists() {
+                    jar_path = p_jar;
+                }
+            } else {
+                let p_jar = versions_dir.join(&parsed.game_version).join(format!("{}.jar", parsed.game_version));
+                if p_jar.exists() {
+                    jar_path = p_jar;
+                }
+            }
+        }
+
+        // 2. Locate Java executable (prefers Eclipse Temurin)
+        let java_bin = JavaManager::find_best_java_for_minecraft(&config.java_path, &parsed.game_version).ok_or_else(|| {
             format!(
                 "Java не найдена на вашем компьютере!\n\
-                Перейдите во вкладку «Java Runtimes» и нажмите «Установить Eclipse Temurin 21» в 1 клик."
+                Перейдите во вкладку «Java Runtimes» и нажмите «Установить Java 25» или «Java 21» в 1 клик."
             )
         })?;
 
@@ -117,41 +226,40 @@ impl MinecraftLauncher {
             }
         }
 
-        // 2. Classpath construction
+        // 3. Classpath construction
         let libraries_dir = config.libraries_dir();
         let mut cp_entries = Vec::new();
 
-        if let Some(ref libs) = details.libraries {
+        let mut add_libs = |libs: &[Library]| {
             for lib in libs {
                 if is_allowed_by_rules(lib.rules.as_deref()) {
-                    if let Some(ref dls) = lib.downloads {
+                    let rel_path = if let Some(ref dls) = lib.downloads {
                         if let Some(ref art) = dls.artifact {
-                            let rel_path = match &art.path {
-                                Some(p) => p.clone(),
-                                None => {
-                                    let parts: Vec<&str> = lib.name.split(':').collect();
-                                    if parts.len() >= 3 {
-                                        format!(
-                                            "{}/{}/{}/{}-{}.jar",
-                                            parts[0].replace('.', "/"),
-                                            parts[1],
-                                            parts[2],
-                                            parts[1],
-                                            parts[2]
-                                        )
-                                    } else {
-                                        format!("{}.jar", lib.name)
-                                    }
-                                }
-                            };
-                            let full_path = libraries_dir.join(&rel_path);
-                            if full_path.exists() {
-                                cp_entries.push(full_path);
-                            }
+                            art.path.clone().unwrap_or_else(|| maven_coord_to_path(&lib.name))
+                        } else {
+                            maven_coord_to_path(&lib.name)
                         }
+                    } else {
+                        maven_coord_to_path(&lib.name)
+                    };
+                    let full_path = libraries_dir.join(&rel_path);
+                    if full_path.exists() {
+                        cp_entries.push(full_path);
                     }
                 }
             }
+        };
+
+        // Add parent (vanilla) libraries first
+        if let Some(ref p_det) = parent_details {
+            if let Some(ref p_libs) = p_det.libraries {
+                add_libs(p_libs);
+            }
+        }
+
+        // Add loader/version libraries
+        if let Some(ref libs) = details.libraries {
+            add_libs(libs);
         }
 
         cp_entries.push(jar_path);
@@ -163,15 +271,16 @@ impl MinecraftLauncher {
             .collect::<Vec<_>>()
             .join(path_sep);
 
-        // 3. Substitution variables
+        // 4. Substitution variables
         let assets_dir = config.assets_dir();
         let asset_index_id = details
             .asset_index
             .as_ref()
+            .or_else(|| parent_details.as_ref().and_then(|p| p.asset_index.as_ref()))
             .map(|a| a.id.clone())
-            .unwrap_or_else(|| version.to_string());
+            .unwrap_or_else(|| parsed.game_version.clone());
 
-        let natives_dir = v_dir.join("natives");
+        let natives_dir = target_dir.join("natives");
         let _ = fs::create_dir_all(&natives_dir);
 
         let offline_uuid = offline_player_uuid(&config.username);
@@ -179,7 +288,7 @@ impl MinecraftLauncher {
         let subst = |input: &str| -> String {
             input
                 .replace("${auth_player_name}", &config.username)
-                .replace("${version_name}", version)
+                .replace("${version_name}", &actual_id)
                 .replace("${game_directory}", &config.game_dir)
                 .replace("${assets_root}", &assets_dir.to_string_lossy())
                 .replace("${assets_index_name}", &asset_index_id)
@@ -197,23 +306,30 @@ impl MinecraftLauncher {
                 .replace("${library_directory}", &libraries_dir.to_string_lossy())
         };
 
-        // 4. JVM arguments evaluation
+        // 5. JVM arguments evaluation
         let mut has_classpath_flag = false;
 
-        if let Some(jvm_args) = details.arguments.as_ref().and_then(|a| a.jvm.as_ref()) {
-            for arg_val in jvm_args {
+        let eval_jvm_args = |args: &[serde_json::Value], cmd: &mut Command, has_cp: &mut bool| {
+            for arg_val in args {
                 if is_arg_allowed(arg_val) {
                     for raw in extract_arg_values(arg_val) {
                         let replaced = subst(&raw);
                         if replaced == "-cp" || replaced == "-classpath" {
-                            has_classpath_flag = true;
+                            *has_cp = true;
                         }
                         cmd.arg(replaced);
                     }
                 }
             }
-        } else {
-            // Older versions JVM flags fallback
+        };
+
+        if let Some(jvm_args) = parent_details.as_ref().and_then(|p| p.arguments.as_ref()).and_then(|a| a.jvm.as_ref()) {
+            eval_jvm_args(jvm_args, &mut cmd, &mut has_classpath_flag);
+        }
+
+        if let Some(jvm_args) = details.arguments.as_ref().and_then(|a| a.jvm.as_ref()) {
+            eval_jvm_args(jvm_args, &mut cmd, &mut has_classpath_flag);
+        } else if parent_details.is_none() {
             cmd.arg(format!("-Djava.library.path={}", natives_dir.display()));
         }
 
@@ -227,24 +343,30 @@ impl MinecraftLauncher {
             config.game_dir
         ));
 
-        // 5. Main class
+        // 6. Main class
         cmd.arg(details.get_main_class());
 
-        // 6. Game arguments
+        // 7. Game arguments
         let mut has_resolution = false;
 
-        if let Some(game_args) = details.arguments.as_ref().and_then(|a| a.game.as_ref()) {
-            for arg_val in game_args {
+        let eval_game_args = |args: &[serde_json::Value], cmd: &mut Command, has_res: &mut bool| {
+            for arg_val in args {
                 if is_arg_allowed(arg_val) {
                     for raw in extract_arg_values(arg_val) {
                         let replaced = subst(&raw);
                         if replaced == "--width" || replaced == "--height" {
-                            has_resolution = true;
+                            *has_res = true;
                         }
                         cmd.arg(replaced);
                     }
                 }
             }
+        };
+
+        if let Some(game_args) = details.arguments.as_ref().and_then(|a| a.game.as_ref()) {
+            eval_game_args(game_args, &mut cmd, &mut has_resolution);
+        } else if let Some(game_args) = parent_details.as_ref().and_then(|p| p.arguments.as_ref()).and_then(|a| a.game.as_ref()) {
+            eval_game_args(game_args, &mut cmd, &mut has_resolution);
         } else if let Some(ref legacy_args) = details.minecraft_arguments {
             for token in legacy_args.split_whitespace() {
                 let replaced = subst(token);
@@ -254,9 +376,8 @@ impl MinecraftLauncher {
                 cmd.arg(replaced);
             }
         } else {
-            // Standard fallback
             cmd.arg("--username").arg(&config.username);
-            cmd.arg("--version").arg(version);
+            cmd.arg("--version").arg(&actual_id);
             cmd.arg("--gameDir").arg(&config.game_dir);
             cmd.arg("--assetsDir").arg(&assets_dir);
             cmd.arg("--assetIndex").arg(&asset_index_id);
@@ -291,8 +412,8 @@ impl MinecraftLauncher {
             Ok(child) => {
                 let pid = child.id();
                 let msg = format!(
-                    "Minecraft {} запущен! [PID: {}, Выделено ОЗУ: {} МБ]",
-                    version, pid, config.ram_max_mb
+                    "Minecraft {} ({}) запущен! [PID: {}, Выделено ОЗУ: {} МБ]",
+                    parsed.game_version, parsed.loader.label(), pid, config.ram_max_mb
                 );
                 Ok((child, log_path, msg))
             }

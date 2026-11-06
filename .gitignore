@@ -1,4 +1,7 @@
 /target
+runtime/
+*.zip
+*.tar.gz
 **/*.rs.bk
 *.pdb
 *.exe

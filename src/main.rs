@@ -5,6 +5,7 @@ mod catrinth_api;
 mod config;
 mod java_manager;
 mod launcher;
+mod mod_loaders;
 mod mojang_api;
 mod theme;
 
