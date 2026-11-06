@@ -1,16 +1,18 @@
 use egui::{Color32, Margin, Rounding, Stroke, Style, Visuals};
 
-pub const COLOR_BG_MAIN: Color32 = Color32::from_rgb(11, 14, 20);
-pub const COLOR_BG_CARD: Color32 = Color32::from_rgb(19, 23, 34);
-pub const COLOR_BG_SURFACE: Color32 = Color32::from_rgb(32, 39, 56);
-pub const COLOR_BG_INPUT: Color32 = Color32::from_rgb(15, 18, 26);
-pub const COLOR_BORDER: Color32 = Color32::from_rgb(36, 44, 61);
+pub const COLOR_BG_MAIN: Color32 = Color32::from_rgb(15, 17, 21);
+pub const COLOR_BG_SIDEBAR: Color32 = Color32::from_rgb(19, 21, 27);
+pub const COLOR_BG_CARD: Color32 = Color32::from_rgb(24, 26, 33);
+pub const COLOR_BG_SURFACE: Color32 = Color32::from_rgb(32, 35, 45);
+pub const COLOR_BG_INPUT: Color32 = Color32::from_rgb(18, 20, 26);
+pub const COLOR_BORDER: Color32 = Color32::from_rgb(38, 42, 54);
 
 pub const COLOR_PRIMARY: Color32 = Color32::from_rgb(16, 185, 129);
 pub const COLOR_PRIMARY_HOVER: Color32 = Color32::from_rgb(5, 150, 105);
-pub const COLOR_PURPLE: Color32 = Color32::from_rgb(139, 92, 246);
-pub const COLOR_TEXT_PRIMARY: Color32 = Color32::from_rgb(248, 250, 252);
-pub const COLOR_TEXT_MUTED: Color32 = Color32::from_rgb(148, 163, 184);
+pub const COLOR_PURPLE: Color32 = Color32::from_rgb(168, 85, 247);
+pub const COLOR_RED: Color32 = Color32::from_rgb(239, 68, 68);
+pub const COLOR_TEXT_PRIMARY: Color32 = Color32::from_rgb(243, 244, 246);
+pub const COLOR_TEXT_MUTED: Color32 = Color32::from_rgb(140, 147, 164);
 
 pub fn apply_catrinth_theme(ctx: &egui::Context) {
     let mut visuals = Visuals::dark();

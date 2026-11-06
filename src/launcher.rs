@@ -1,10 +1,11 @@
 use crate::config::LauncherConfig;
+use crate::java_manager::JavaManager;
 use crate::mojang_api::{
     extract_arg_values, is_allowed_by_rules, is_arg_allowed, offline_player_uuid, VersionDetails,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
 
 #[derive(Debug, Clone)]
 pub struct InstalledMod {
@@ -76,7 +77,7 @@ impl MinecraftLauncher {
         list
     }
 
-    pub fn launch(config: &LauncherConfig, version: &str) -> Result<String, String> {
+    pub fn launch(config: &LauncherConfig, version: &str) -> Result<(Child, PathBuf, String), String> {
         let versions_dir = config.versions_dir();
         let v_dir = versions_dir.join(version);
         let jar_path = v_dir.join(format!("{}.jar", version));
@@ -95,11 +96,11 @@ impl MinecraftLauncher {
         let details: VersionDetails = serde_json::from_str(&json_content)
             .map_err(|e| format!("Ошибка парсинга версии {}: {}", version, e))?;
 
-        // 1. Locate Java executable
-        let java_bin = find_java_binary(&config.java_path).ok_or_else(|| {
+        // 1. Locate Java executable (prefers Eclipse Temurin)
+        let java_bin = JavaManager::find_best_java_for_minecraft(&config.java_path, version).ok_or_else(|| {
             format!(
                 "Java не найдена на вашем компьютере!\n\
-                Установите Java (рекомендуется Java 21) или укажите правильный путь к javaw.exe в Настройках лаунчера."
+                Перейдите во вкладку «Java Runtimes» и нажмите «Установить Eclipse Temurin 21» в 1 клик."
             )
         })?;
 
@@ -273,17 +274,30 @@ impl MinecraftLauncher {
         let _ = fs::create_dir_all(&config.game_dir);
         cmd.current_dir(&config.game_dir);
 
+        // Redirect stdout & stderr to game log file
+        let log_dir = Path::new(&config.game_dir).join("logs");
+        let _ = fs::create_dir_all(&log_dir);
+        let log_path = log_dir.join("catrinth-game.log");
+
+        if let Ok(file_out) = fs::File::create(&log_path) {
+            if let Ok(file_err) = file_out.try_clone() {
+                cmd.stdout(std::process::Stdio::from(file_out));
+                cmd.stderr(std::process::Stdio::from(file_err));
+            }
+        }
+
         // Spawn Minecraft process in background
         match cmd.spawn() {
             Ok(child) => {
                 let pid = child.id();
-                Ok(format!(
-                    "Minecraft {} успешно запущен! [PID: {}, ОЗУ: {} МБ]",
+                let msg = format!(
+                    "Minecraft {} запущен! [PID: {}, Выделено ОЗУ: {} МБ]",
                     version, pid, config.ram_max_mb
-                ))
+                );
+                Ok((child, log_path, msg))
             }
             Err(e) => Err(format!(
-                "Ошибка запуска процесса Minecraft через {}: {}\nПроверьте настройки Java.",
+                "Ошибка запуска процесса Java ({}) для Minecraft: {}\nПроверьте путь к Java во вкладке «Java Runtimes».",
                 java_bin.display(),
                 e
             )),
@@ -291,60 +305,16 @@ impl MinecraftLauncher {
     }
 }
 
-pub fn find_java_binary(configured: &str) -> Option<PathBuf> {
-    let trimmed = configured.trim();
-    if !trimmed.is_empty() {
-        let p = PathBuf::from(trimmed);
-        if p.exists() {
-            return Some(p);
+pub fn read_log_tail(path: &Path, max_lines: usize) -> String {
+    if let Ok(content) = fs::read_to_string(path) {
+        let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+        if lines.len() <= max_lines {
+            return lines.join("\n");
+        } else {
+            return lines[lines.len() - max_lines..].join("\n");
         }
     }
-
-    // Try PATH
-    let probe = if cfg!(target_os = "windows") { "javaw.exe" } else { "java" };
-    if let Ok(output) = Command::new(probe).arg("-version").output() {
-        if output.status.success() || !output.stderr.is_empty() {
-            return Some(PathBuf::from(probe));
-        }
-    }
-
-    if cfg!(target_os = "windows") {
-        if let Ok(output) = Command::new("java.exe").arg("-version").output() {
-            if output.status.success() || !output.stderr.is_empty() {
-                return Some(PathBuf::from("java.exe"));
-            }
-        }
-
-        // Search known Java paths
-        let roots = [
-            r"C:\Program Files\Eclipse Adoptium",
-            r"C:\Program Files\Java",
-            r"C:\Program Files\BellSoft",
-            r"C:\Program Files\Microsoft",
-            r"C:\Program Files\Zulu",
-            r"C:\Program Files\Amazon Corretto",
-        ];
-
-        for root in roots {
-            let path = Path::new(root);
-            if path.exists() {
-                if let Ok(entries) = fs::read_dir(path) {
-                    for entry in entries.flatten() {
-                        let javaw = entry.path().join("bin").join("javaw.exe");
-                        if javaw.exists() {
-                            return Some(javaw);
-                        }
-                        let java = entry.path().join("bin").join("java.exe");
-                        if java.exists() {
-                            return Some(java);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    None
+    String::new()
 }
 
 pub fn format_bytes(bytes: u64) -> String {
