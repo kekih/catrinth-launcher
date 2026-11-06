@@ -1,4 +1,7 @@
 use crate::config::LauncherConfig;
+use crate::mojang_api::{
+    extract_arg_values, is_allowed_by_rules, is_arg_allowed, offline_player_uuid, VersionDetails,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -23,29 +26,26 @@ impl MinecraftLauncher {
                     if let Ok(file_type) = entry.file_type() {
                         if file_type.is_dir() {
                             let name = entry.file_name().to_string_lossy().to_string();
-                            versions.push(name);
+                            let jar_path = entry.path().join(format!("{}.jar", name));
+                            if jar_path.exists() {
+                                versions.push(name);
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Default popular versions if no custom profiles found yet
-        if versions.is_empty() {
-            versions = vec![
-                "1.21.1".to_string(),
-                "1.20.4".to_string(),
-                "1.20.1".to_string(),
-                "1.19.4".to_string(),
-                "1.18.2".to_string(),
-                "1.16.5".to_string(),
-                "1.12.2".to_string(),
-            ];
-        }
-
         versions.sort();
         versions.reverse();
         versions
+    }
+
+    pub fn is_version_installed(config: &LauncherConfig, version: &str) -> bool {
+        let v_dir = config.versions_dir().join(version);
+        let jar = v_dir.join(format!("{}.jar", version));
+        let json = v_dir.join(format!("{}.json", version));
+        jar.exists() && json.exists()
     }
 
     pub fn get_installed_mods(config: &LauncherConfig) -> Vec<InstalledMod> {
@@ -77,68 +77,274 @@ impl MinecraftLauncher {
     }
 
     pub fn launch(config: &LauncherConfig, version: &str) -> Result<String, String> {
-        let java_bin = if config.java_path.trim().is_empty() {
-            if cfg!(target_os = "windows") { "javaw" } else { "java" }
-        } else {
-            &config.java_path
-        };
+        let versions_dir = config.versions_dir();
+        let v_dir = versions_dir.join(version);
+        let jar_path = v_dir.join(format!("{}.jar", version));
+        let json_path = v_dir.join(format!("{}.json", version));
 
-        let mut cmd = Command::new(java_bin);
+        if !jar_path.exists() || !json_path.exists() {
+            return Err(format!(
+                "Версия {} не установлена! Нажмите кнопку «Скачать и запустить Minecraft».",
+                version
+            ));
+        }
+
+        // Parse version details JSON
+        let json_content = fs::read_to_string(&json_path)
+            .map_err(|e| format!("Не удалось прочитать {}: {}", json_path.display(), e))?;
+        let details: VersionDetails = serde_json::from_str(&json_content)
+            .map_err(|e| format!("Ошибка парсинга версии {}: {}", version, e))?;
+
+        // 1. Locate Java executable
+        let java_bin = find_java_binary(&config.java_path).ok_or_else(|| {
+            format!(
+                "Java не найдена на вашем компьютере!\n\
+                Установите Java (рекомендуется Java 21) или укажите правильный путь к javaw.exe в Настройках лаунчера."
+            )
+        })?;
+
+        let mut cmd = Command::new(&java_bin);
 
         // Memory arguments (RAM)
         cmd.arg(format!("-Xms{}M", config.ram_min_mb));
         cmd.arg(format!("-Xmx{}M", config.ram_max_mb));
 
-        // JVM arguments
+        // Custom user JVM args
         for arg in config.jvm_args.split_whitespace() {
             if !arg.is_empty() {
                 cmd.arg(arg);
             }
         }
 
-        // Directories & settings
-        cmd.arg("-Dfile.encoding=UTF-8");
-        cmd.arg(format!("-Dminecraft.applet.TargetDirectory={}", config.game_dir));
+        // 2. Classpath construction
+        let libraries_dir = config.libraries_dir();
+        let mut cp_entries = Vec::new();
 
-        // Game parameters
-        let version_jar = config.versions_dir().join(version).join(format!("{}.jar", version));
-        if version_jar.exists() {
-            cmd.arg("-cp").arg(version_jar);
-            cmd.arg("net.minecraft.client.main.Main");
-        } else {
-            // Standalone jar or fallback entry
-            let fallback_jar = Path::new(&config.game_dir).join("minecraft.jar");
-            if fallback_jar.exists() {
-                cmd.arg("-jar").arg(fallback_jar);
-            } else {
-                cmd.arg("-version"); // Valid probe command if jar is missing
+        if let Some(ref libs) = details.libraries {
+            for lib in libs {
+                if is_allowed_by_rules(lib.rules.as_deref()) {
+                    if let Some(ref dls) = lib.downloads {
+                        if let Some(ref art) = dls.artifact {
+                            let rel_path = match &art.path {
+                                Some(p) => p.clone(),
+                                None => {
+                                    let parts: Vec<&str> = lib.name.split(':').collect();
+                                    if parts.len() >= 3 {
+                                        format!(
+                                            "{}/{}/{}/{}-{}.jar",
+                                            parts[0].replace('.', "/"),
+                                            parts[1],
+                                            parts[2],
+                                            parts[1],
+                                            parts[2]
+                                        )
+                                    } else {
+                                        format!("{}.jar", lib.name)
+                                    }
+                                }
+                            };
+                            let full_path = libraries_dir.join(&rel_path);
+                            if full_path.exists() {
+                                cp_entries.push(full_path);
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        cmd.arg("--username").arg(&config.username);
-        cmd.arg("--version").arg(version);
-        cmd.arg("--gameDir").arg(&config.game_dir);
-        cmd.arg("--assetsDir").arg(Path::new(&config.game_dir).join("assets"));
-        cmd.arg("--width").arg(config.window_width.to_string());
-        cmd.arg("--height").arg(config.window_height.to_string());
+        cp_entries.push(jar_path);
 
-        // Spawn process asynchronously in background
+        let path_sep = if cfg!(target_os = "windows") { ";" } else { ":" };
+        let classpath_str = cp_entries
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(path_sep);
+
+        // 3. Substitution variables
+        let assets_dir = config.assets_dir();
+        let asset_index_id = details
+            .asset_index
+            .as_ref()
+            .map(|a| a.id.clone())
+            .unwrap_or_else(|| version.to_string());
+
+        let natives_dir = v_dir.join("natives");
+        let _ = fs::create_dir_all(&natives_dir);
+
+        let offline_uuid = offline_player_uuid(&config.username);
+
+        let subst = |input: &str| -> String {
+            input
+                .replace("${auth_player_name}", &config.username)
+                .replace("${version_name}", version)
+                .replace("${game_directory}", &config.game_dir)
+                .replace("${assets_root}", &assets_dir.to_string_lossy())
+                .replace("${assets_index_name}", &asset_index_id)
+                .replace("${auth_uuid}", &offline_uuid)
+                .replace("${auth_access_token}", "0")
+                .replace("${clientid}", "0")
+                .replace("${auth_xuid}", "0")
+                .replace("${user_type}", "mojang")
+                .replace("${version_type}", "release")
+                .replace("${natives_directory}", &natives_dir.to_string_lossy())
+                .replace("${launcher_name}", "Catrinth")
+                .replace("${launcher_version}", "1.0.0")
+                .replace("${classpath}", &classpath_str)
+                .replace("${classpath_separator}", path_sep)
+                .replace("${library_directory}", &libraries_dir.to_string_lossy())
+        };
+
+        // 4. JVM arguments evaluation
+        let mut has_classpath_flag = false;
+
+        if let Some(ref jvm_args) = details.arguments.as_ref().and_then(|a| a.jvm.as_ref()) {
+            for arg_val in jvm_args {
+                if is_arg_allowed(arg_val) {
+                    for raw in extract_arg_values(arg_val) {
+                        let replaced = subst(&raw);
+                        if replaced == "-cp" || replaced == "-classpath" {
+                            has_classpath_flag = true;
+                        }
+                        cmd.arg(replaced);
+                    }
+                }
+            }
+        } else {
+            // Older versions JVM flags fallback
+            cmd.arg(format!("-Djava.library.path={}", natives_dir.display()));
+        }
+
+        if !has_classpath_flag {
+            cmd.arg("-cp").arg(&classpath_str);
+        }
+
+        cmd.arg("-Dfile.encoding=UTF-8");
+        cmd.arg(format!(
+            "-Dminecraft.applet.TargetDirectory={}",
+            config.game_dir
+        ));
+
+        // 5. Main class
+        cmd.arg(details.get_main_class());
+
+        // 6. Game arguments
+        let mut has_resolution = false;
+
+        if let Some(ref game_args) = details.arguments.as_ref().and_then(|a| a.game.as_ref()) {
+            for arg_val in game_args {
+                if is_arg_allowed(arg_val) {
+                    for raw in extract_arg_values(arg_val) {
+                        let replaced = subst(&raw);
+                        if replaced == "--width" || replaced == "--height" {
+                            has_resolution = true;
+                        }
+                        cmd.arg(replaced);
+                    }
+                }
+            }
+        } else if let Some(ref legacy_args) = details.minecraft_arguments {
+            for token in legacy_args.split_whitespace() {
+                let replaced = subst(token);
+                if replaced == "--width" || replaced == "--height" {
+                    has_resolution = true;
+                }
+                cmd.arg(replaced);
+            }
+        } else {
+            // Standard fallback
+            cmd.arg("--username").arg(&config.username);
+            cmd.arg("--version").arg(version);
+            cmd.arg("--gameDir").arg(&config.game_dir);
+            cmd.arg("--assetsDir").arg(&assets_dir);
+            cmd.arg("--assetIndex").arg(&asset_index_id);
+            cmd.arg("--uuid").arg(&offline_uuid);
+            cmd.arg("--accessToken").arg("0");
+            cmd.arg("--userType").arg("mojang");
+        }
+
+        if !has_resolution {
+            cmd.arg("--width").arg(config.window_width.to_string());
+            cmd.arg("--height").arg(config.window_height.to_string());
+        }
+
+        // Set working directory to game_dir
+        let _ = fs::create_dir_all(&config.game_dir);
+        cmd.current_dir(&config.game_dir);
+
+        // Spawn Minecraft process in background
         match cmd.spawn() {
             Ok(child) => {
                 let pid = child.id();
                 Ok(format!(
-                    "Minecraft {} успешно запущен! [PID: {}, Выделено ОЗУ: {} МБ]",
+                    "Minecraft {} успешно запущен! [PID: {}, ОЗУ: {} МБ]",
                     version, pid, config.ram_max_mb
                 ))
             }
-            Err(e) => {
-                Err(format!(
-                    "Ошибка запуска Java ({}) для Minecraft: {}\nПроверьте путь к Java в Настройках.",
-                    java_bin, e
-                ))
+            Err(e) => Err(format!(
+                "Ошибка запуска процесса Minecraft через {}: {}\nПроверьте настройки Java.",
+                java_bin.display(),
+                e
+            )),
+        }
+    }
+}
+
+pub fn find_java_binary(configured: &str) -> Option<PathBuf> {
+    let trimmed = configured.trim();
+    if !trimmed.is_empty() {
+        let p = PathBuf::from(trimmed);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    // Try PATH
+    let probe = if cfg!(target_os = "windows") { "javaw.exe" } else { "java" };
+    if let Ok(output) = Command::new(probe).arg("-version").output() {
+        if output.status.success() || !output.stderr.is_empty() {
+            return Some(PathBuf::from(probe));
+        }
+    }
+
+    if cfg!(target_os = "windows") {
+        if let Ok(output) = Command::new("java.exe").arg("-version").output() {
+            if output.status.success() || !output.stderr.is_empty() {
+                return Some(PathBuf::from("java.exe"));
+            }
+        }
+
+        // Search known Java paths
+        let roots = [
+            r"C:\Program Files\Eclipse Adoptium",
+            r"C:\Program Files\Java",
+            r"C:\Program Files\BellSoft",
+            r"C:\Program Files\Microsoft",
+            r"C:\Program Files\Zulu",
+            r"C:\Program Files\Amazon Corretto",
+        ];
+
+        for root in roots {
+            let path = Path::new(root);
+            if path.exists() {
+                if let Ok(entries) = fs::read_dir(path) {
+                    for entry in entries.flatten() {
+                        let javaw = entry.path().join("bin").join("javaw.exe");
+                        if javaw.exists() {
+                            return Some(javaw);
+                        }
+                        let java = entry.path().join("bin").join("java.exe");
+                        if java.exists() {
+                            return Some(java);
+                        }
+                    }
+                }
             }
         }
     }
+
+    None
 }
 
 pub fn format_bytes(bytes: u64) -> String {

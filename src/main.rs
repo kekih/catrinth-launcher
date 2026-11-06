@@ -4,6 +4,7 @@ mod app;
 mod catrinth_api;
 mod config;
 mod launcher;
+mod mojang_api;
 mod theme;
 
 use app::CatrinthApp;

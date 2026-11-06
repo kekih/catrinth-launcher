@@ -101,4 +101,12 @@ impl LauncherConfig {
     pub fn versions_dir(&self) -> PathBuf {
         Path::new(&self.game_dir).join("versions")
     }
+
+    pub fn libraries_dir(&self) -> PathBuf {
+        Path::new(&self.game_dir).join("libraries")
+    }
+
+    pub fn assets_dir(&self) -> PathBuf {
+        Path::new(&self.game_dir).join("assets")
+    }
 }
