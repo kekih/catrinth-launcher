@@ -680,16 +680,19 @@ impl CatrinthApp {
         }
 
         // Search Results List
+        let mut download_slug_action: Option<String> = None;
+        let hits = self.search_results.clone();
+
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                if self.search_results.is_empty() {
+                if hits.is_empty() {
                     ui.vertical_centered(|ui| {
                         ui.add_space(40.0);
                         ui.label(RichText::new("Ничего не найдено").color(COLOR_TEXT_MUTED).size(16.0));
                     });
                 } else {
-                    for hit in &self.search_results {
+                    for hit in &hits {
                         let title = &hit.title;
                         let p_type = hit.project_type.as_deref().unwrap_or("mod");
                         let author = hit.author.as_deref().unwrap_or("Автор");
@@ -699,7 +702,7 @@ impl CatrinthApp {
 
                         egui::Frame::none()
                             .fill(COLOR_BG_CARD)
-                            .stroke(Stroke::new(1.0, COLOR_BORDER))
+                            .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
                             .rounding(Rounding::same(8.0))
                             .inner_margin(Margin::same(16.0))
                             .show(ui, |ui| {
@@ -755,36 +758,7 @@ impl CatrinthApp {
                                         .rounding(Rounding::same(6.0));
 
                                         if ui.add(download_btn).clicked() {
-                                            let client = CatrinthClient::new(self.config.api_proxy_url.clone());
-                                            match client.get_project_versions(slug) {
-                                                Ok(versions) => {
-                                                    if let Some(first_ver) = versions.first() {
-                                                        if let Some(file) = first_ver.files.iter().find(|f| f.primary.unwrap_or(false)).or_else(|| first_ver.files.first()) {
-                                                            let mods_dir = self.config.mods_dir();
-                                                            let target = mods_dir.join(&file.filename);
-                                                            match client.download_file(&file.url, &target) {
-                                                                Ok(_) => {
-                                                                    self.mod_status_message = Some((
-                                                                        format!("Мод {} успешно сохранён в mods!", file.filename),
-                                                                        false,
-                                                                    ));
-                                                                    self.refresh_installed_mods();
-                                                                }
-                                                                Err(e) => {
-                                                                    self.mod_status_message = Some((e, true));
-                                                                }
-                                                            }
-                                                        } else {
-                                                            self.mod_status_message = Some(("У этой версии нет файлов".to_string(), true));
-                                                        }
-                                                    } else {
-                                                        self.mod_status_message = Some(("Версии не найдены".to_string(), true));
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    self.mod_status_message = Some((e, true));
-                                                }
-                                            }
+                                            download_slug_action = Some(slug.to_string());
                                         }
                                     });
                                 });
@@ -793,6 +767,39 @@ impl CatrinthApp {
                     }
                 }
             });
+
+        if let Some(slug) = download_slug_action {
+            let client = CatrinthClient::new(self.config.api_proxy_url.clone());
+            match client.get_project_versions(&slug) {
+                Ok(versions) => {
+                    if let Some(first_ver) = versions.first() {
+                        if let Some(file) = first_ver.files.iter().find(|f| f.primary.unwrap_or(false)).or_else(|| first_ver.files.first()) {
+                            let mods_dir = self.config.mods_dir();
+                            let target = mods_dir.join(&file.filename);
+                            match client.download_file(&file.url, &target) {
+                                Ok(_) => {
+                                    self.mod_status_message = Some((
+                                        format!("Мод {} успешно сохранён в mods!", file.filename),
+                                        false,
+                                    ));
+                                    self.refresh_installed_mods();
+                                }
+                                Err(e) => {
+                                    self.mod_status_message = Some((e, true));
+                                }
+                            }
+                        } else {
+                            self.mod_status_message = Some(("У этой версии нет файлов".to_string(), true));
+                        }
+                    } else {
+                        self.mod_status_message = Some(("Версии не найдены".to_string(), true));
+                    }
+                }
+                Err(e) => {
+                    self.mod_status_message = Some((e, true));
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------------
