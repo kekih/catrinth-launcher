@@ -30,7 +30,7 @@ pub struct CatrinthApp {
     status_message: Option<(String, bool)>, // (msg, is_error)
 
     // Download & Launch State
-    download_progress: Arc<Mutex<Option<DownloadProgress>>>,
+    download_progress: Arc<Mutex<DownloadProgress>>,
     is_downloading: bool,
     manifest_cache: Arc<Mutex<Option<VersionManifest>>>,
 
@@ -84,7 +84,7 @@ impl CatrinthApp {
             available_versions: versions,
             show_snapshots: false,
             status_message: None,
-            download_progress: Arc::new(Mutex::new(None)),
+            download_progress: Arc::new(Mutex::new(DownloadProgress::default())),
             is_downloading: false,
             manifest_cache: manifest_slot,
             search_query: String::new(),
@@ -154,7 +154,7 @@ impl CatrinthApp {
         let progress_arc = Arc::clone(&self.download_progress);
         {
             let mut p = progress_arc.lock().unwrap();
-            *p = Some(DownloadProgress {
+            *p = DownloadProgress {
                 stage: format!("Подготовка к загрузке Minecraft {}...", version),
                 current: 0,
                 total: 0,
@@ -162,7 +162,7 @@ impl CatrinthApp {
                 message: "Связь с серверами Mojang (piston-meta)...".to_string(),
                 is_done: false,
                 error: None,
-            });
+            };
         }
 
         let config_clone = self.config.clone();
@@ -176,10 +176,8 @@ impl CatrinthApp {
                 Ok(m) => m,
                 Err(e) => {
                     let mut p = progress_arc.lock().unwrap();
-                    if let Some(ref mut prog) = *p {
-                        prog.error = Some(e);
-                        prog.is_done = true;
-                    }
+                    p.error = Some(e);
+                    p.is_done = true;
                     ctx.request_repaint();
                     return;
                 }
@@ -188,10 +186,8 @@ impl CatrinthApp {
             // 2. Version Details
             {
                 let mut p = progress_arc.lock().unwrap();
-                if let Some(ref mut prog) = *p {
-                    prog.stage = format!("Загрузка описания версии {}...", version);
-                    prog.percent = 0.10;
-                }
+                p.stage = format!("Загрузка описания версии {}...", version);
+                p.percent = 0.10;
             }
             ctx.request_repaint();
 
@@ -199,10 +195,8 @@ impl CatrinthApp {
                 Ok(d) => d,
                 Err(e) => {
                     let mut p = progress_arc.lock().unwrap();
-                    if let Some(ref mut prog) = *p {
-                        prog.error = Some(e);
-                        prog.is_done = true;
-                    }
+                    p.error = Some(e);
+                    p.is_done = true;
                     ctx.request_repaint();
                     return;
                 }
@@ -211,10 +205,8 @@ impl CatrinthApp {
             // 3. Client JAR
             if let Err(e) = mojang.download_client_jar(&game_dir, &details, &progress_arc) {
                 let mut p = progress_arc.lock().unwrap();
-                if let Some(ref mut prog) = *p {
-                    prog.error = Some(e);
-                    prog.is_done = true;
-                }
+                p.error = Some(e);
+                p.is_done = true;
                 ctx.request_repaint();
                 return;
             }
@@ -222,10 +214,8 @@ impl CatrinthApp {
             // 4. Libraries
             if let Err(e) = mojang.download_libraries(&game_dir, &details, &progress_arc) {
                 let mut p = progress_arc.lock().unwrap();
-                if let Some(ref mut prog) = *p {
-                    prog.error = Some(e);
-                    prog.is_done = true;
-                }
+                p.error = Some(e);
+                p.is_done = true;
                 ctx.request_repaint();
                 return;
             }
@@ -233,10 +223,8 @@ impl CatrinthApp {
             // 5. Assets (textures, sounds)
             if let Err(e) = mojang.download_assets(&game_dir, &details, &progress_arc) {
                 let mut p = progress_arc.lock().unwrap();
-                if let Some(ref mut prog) = *p {
-                    prog.error = Some(e);
-                    prog.is_done = true;
-                }
+                p.error = Some(e);
+                p.is_done = true;
                 ctx.request_repaint();
                 return;
             }
@@ -244,27 +232,21 @@ impl CatrinthApp {
             // 6. Launch!
             {
                 let mut p = progress_arc.lock().unwrap();
-                if let Some(ref mut prog) = *p {
-                    prog.stage = "Все файлы готовы! Запуск Minecraft...".to_string();
-                    prog.percent = 1.0;
-                }
+                p.stage = "Все файлы готовы! Запуск Minecraft...".to_string();
+                p.percent = 1.0;
             }
             ctx.request_repaint();
 
             match MinecraftLauncher::launch(&config_clone, &version) {
                 Ok(msg) => {
                     let mut p = progress_arc.lock().unwrap();
-                    if let Some(ref mut prog) = *p {
-                        prog.message = msg;
-                        prog.is_done = true;
-                    }
+                    p.message = msg;
+                    p.is_done = true;
                 }
                 Err(e) => {
                     let mut p = progress_arc.lock().unwrap();
-                    if let Some(ref mut prog) = *p {
-                        prog.error = Some(e);
-                        prog.is_done = true;
-                    }
+                    p.error = Some(e);
+                    p.is_done = true;
                 }
             }
             ctx.request_repaint();
@@ -274,39 +256,26 @@ impl CatrinthApp {
 
 impl eframe::App for CatrinthApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Check for fetched Mojang version manifest
-        if let Ok(mut slot) = self.manifest_cache.try_lock() {
-            if let Some(manifest) = slot.take() {
-                self.apply_version_manifest(&manifest);
-            }
+        // Check for fetched Mojang version manifest (safe release of lock)
+        let manifest_opt = self.manifest_cache.try_lock().ok().and_then(|mut s| s.take());
+        if let Some(manifest) = manifest_opt {
+            self.apply_version_manifest(&manifest);
         }
 
         // Check download worker status
         if self.is_downloading {
             ctx.request_repaint();
-            let mut done = false;
-            let mut err = None;
-            let mut success = None;
-
-            if let Ok(p_guard) = self.download_progress.try_lock() {
-                if let Some(ref p) = *p_guard {
-                    if p.is_done {
-                        done = true;
-                        if let Some(ref e) = p.error {
-                            err = Some(e.clone());
-                        } else if !p.message.is_empty() {
-                            success = Some(p.message.clone());
-                        }
-                    }
-                }
-            }
+            let (done, err, success) = {
+                let p = self.download_progress.lock().unwrap();
+                (p.is_done, p.error.clone(), p.message.clone())
+            };
 
             if done {
                 self.is_downloading = false;
                 if let Some(e) = err {
                     self.status_message = Some((e, true));
-                } else if let Some(m) = success {
-                    self.status_message = Some((m, false));
+                } else if !success.is_empty() {
+                    self.status_message = Some((success, false));
                 }
                 self.available_versions =
                     MinecraftLauncher::get_installed_versions(&self.config);
@@ -514,7 +483,7 @@ impl CatrinthApp {
                                     );
                                 } else {
                                     ui.label(
-                                        RichText::new("⬇ Доступна для скачивания")
+                                        RichText::new("⬇ Требуется скачивание")
                                             .color(COLOR_PURPLE)
                                             .size(12.0),
                                     );
@@ -554,33 +523,31 @@ impl CatrinthApp {
                             .inner_margin(Margin::same(16.0))
                             .show(ui, |ui| {
                                 ui.set_max_width(640.0);
-                                let p_opt = self.download_progress.lock().unwrap();
-                                if let Some(ref p) = *p_opt {
-                                    ui.horizontal(|ui| {
-                                        ui.label(RichText::new("📦").size(18.0));
-                                        ui.label(
-                                            RichText::new(&p.stage)
-                                                .color(COLOR_PRIMARY)
-                                                .strong()
-                                                .size(14.0),
-                                        );
-                                    });
-
-                                    ui.add_space(8.0);
-                                    ui.add(
-                                        egui::ProgressBar::new(p.percent)
-                                            .show_percentage()
-                                            .animate(true),
+                                let p = self.download_progress.lock().unwrap().clone();
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("📦").size(18.0));
+                                    ui.label(
+                                        RichText::new(&p.stage)
+                                            .color(COLOR_PRIMARY)
+                                            .strong()
+                                            .size(14.0),
                                     );
+                                });
 
-                                    if !p.message.is_empty() {
-                                        ui.add_space(6.0);
-                                        ui.label(
-                                            RichText::new(&p.message)
-                                                .color(COLOR_TEXT_MUTED)
-                                                .size(12.0),
-                                        );
-                                    }
+                                ui.add_space(8.0);
+                                ui.add(
+                                    egui::ProgressBar::new(p.percent)
+                                        .show_percentage()
+                                        .animate(true),
+                                );
+
+                                if !p.message.is_empty() {
+                                    ui.add_space(6.0);
+                                    ui.label(
+                                        RichText::new(&p.message)
+                                            .color(COLOR_TEXT_MUTED)
+                                            .size(12.0),
+                                    );
                                 }
                             });
                         ui.add_space(14.0);
@@ -723,6 +690,13 @@ impl CatrinthApp {
                     });
                 } else {
                     for hit in &self.search_results {
+                        let title = &hit.title;
+                        let p_type = hit.project_type.as_deref().unwrap_or("mod");
+                        let author = hit.author.as_deref().unwrap_or("Автор");
+                        let desc = hit.description.as_deref().unwrap_or("");
+                        let dl_count = hit.downloads.unwrap_or(0);
+                        let slug = hit.slug.as_deref().unwrap_or(&hit.title);
+
                         egui::Frame::none()
                             .fill(COLOR_BG_CARD)
                             .stroke(Stroke::new(1.0, COLOR_BORDER))
@@ -734,44 +708,39 @@ impl CatrinthApp {
                                     ui.vertical(|ui| {
                                         ui.horizontal(|ui| {
                                             ui.label(
-                                                RichText::new(&hit.title)
+                                                RichText::new(title)
                                                     .color(COLOR_TEXT_PRIMARY)
                                                     .size(16.0)
                                                     .strong(),
                                             );
                                             ui.label(
-                                                RichText::new(format!("[{}]", hit.project_type))
+                                                RichText::new(format!("[{}]", p_type))
                                                     .color(COLOR_PURPLE)
                                                     .size(11.0),
                                             );
                                             ui.label(
-                                                RichText::new(format!("от {}", hit.author))
+                                                RichText::new(format!("от {}", author))
                                                     .color(COLOR_TEXT_MUTED)
                                                     .size(12.0),
                                             );
                                         });
 
-                                        ui.add_space(4.0);
-                                        ui.label(
-                                            RichText::new(&hit.description)
-                                                .color(COLOR_TEXT_MUTED)
-                                                .size(13.0),
-                                        );
+                                        if !desc.is_empty() {
+                                            ui.add_space(4.0);
+                                            ui.label(
+                                                RichText::new(desc)
+                                                    .color(COLOR_TEXT_MUTED)
+                                                    .size(13.0),
+                                            );
+                                        }
 
                                         ui.add_space(6.0);
                                         ui.horizontal(|ui| {
                                             ui.label(
-                                                RichText::new(format!("⬇ {} скачиваний", hit.downloads))
+                                                RichText::new(format!("⬇ {} скачиваний", dl_count))
                                                     .color(COLOR_TEXT_MUTED)
                                                     .size(11.0),
                                             );
-                                            if !hit.categories.is_empty() {
-                                                ui.label(
-                                                    RichText::new(format!("• {}", hit.categories.join(", ")))
-                                                        .color(COLOR_PRIMARY)
-                                                        .size(11.0),
-                                                );
-                                            }
                                         });
                                     });
 
@@ -787,20 +756,29 @@ impl CatrinthApp {
 
                                         if ui.add(download_btn).clicked() {
                                             let client = CatrinthClient::new(self.config.api_proxy_url.clone());
-                                            match client.get_latest_version_file(&hit.slug, None) {
-                                                Ok(file_info) => {
-                                                    let mods_dir = self.config.mods_dir();
-                                                    match client.download_mod_file(&file_info.url, &file_info.filename, &mods_dir) {
-                                                        Ok(p) => {
-                                                            self.mod_status_message = Some((
-                                                                format!("Мод {} успешно сохранён в {}", file_info.filename, p.display()),
-                                                                false,
-                                                            ));
-                                                            self.refresh_installed_mods();
+                                            match client.get_project_versions(slug) {
+                                                Ok(versions) => {
+                                                    if let Some(first_ver) = versions.first() {
+                                                        if let Some(file) = first_ver.files.iter().find(|f| f.primary.unwrap_or(false)).or_else(|| first_ver.files.first()) {
+                                                            let mods_dir = self.config.mods_dir();
+                                                            let target = mods_dir.join(&file.filename);
+                                                            match client.download_file(&file.url, &target) {
+                                                                Ok(_) => {
+                                                                    self.mod_status_message = Some((
+                                                                        format!("Мод {} успешно сохранён в mods!", file.filename),
+                                                                        false,
+                                                                    ));
+                                                                    self.refresh_installed_mods();
+                                                                }
+                                                                Err(e) => {
+                                                                    self.mod_status_message = Some((e, true));
+                                                                }
+                                                            }
+                                                        } else {
+                                                            self.mod_status_message = Some(("У этой версии нет файлов".to_string(), true));
                                                         }
-                                                        Err(e) => {
-                                                            self.mod_status_message = Some((e, true));
-                                                        }
+                                                    } else {
+                                                        self.mod_status_message = Some(("Версии не найдены".to_string(), true));
                                                     }
                                                 }
                                                 Err(e) => {

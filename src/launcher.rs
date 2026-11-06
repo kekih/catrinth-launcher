@@ -199,7 +199,7 @@ impl MinecraftLauncher {
         // 4. JVM arguments evaluation
         let mut has_classpath_flag = false;
 
-        if let Some(ref jvm_args) = details.arguments.as_ref().and_then(|a| a.jvm.as_ref()) {
+        if let Some(jvm_args) = details.arguments.as_ref().and_then(|a| a.jvm.as_ref()) {
             for arg_val in jvm_args {
                 if is_arg_allowed(arg_val) {
                     for raw in extract_arg_values(arg_val) {
@@ -232,7 +232,7 @@ impl MinecraftLauncher {
         // 6. Game arguments
         let mut has_resolution = false;
 
-        if let Some(ref game_args) = details.arguments.as_ref().and_then(|a| a.game.as_ref()) {
+        if let Some(game_args) = details.arguments.as_ref().and_then(|a| a.game.as_ref()) {
             for arg_val in game_args {
                 if is_arg_allowed(arg_val) {
                     for raw in extract_arg_values(arg_val) {
