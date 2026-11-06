@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+*.pdb
+*.exe
+*.log
+catrinth-config.json
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

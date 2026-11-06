@@ -1,0 +1,25 @@
+[package]
+name = "catrinth-launcher"
+version = "1.0.0"
+edition = "2021"
+authors = ["Catrinth Team <support@catrinth.ru>"]
+description = "Modern dark-themed Minecraft launcher written in Rust with Catrinth Proxy integration"
+license = "MIT"
+
+[dependencies]
+eframe = { version = "0.28.1", default-features = false, features = ["default_fonts", "glow"] }
+egui = "0.28.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+rfd = "0.14"
+open = "5.3"
+dirs = "5.0"
+chrono = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
