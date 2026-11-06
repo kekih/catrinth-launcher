@@ -304,6 +304,8 @@ impl MinecraftLauncher {
                 .replace("${classpath}", &classpath_str)
                 .replace("${classpath_separator}", path_sep)
                 .replace("${library_directory}", &libraries_dir.to_string_lossy())
+                .replace("${resolution_width}", &config.window_width.to_string())
+                .replace("${resolution_height}", &config.window_height.to_string())
         };
 
         // 5. JVM arguments evaluation

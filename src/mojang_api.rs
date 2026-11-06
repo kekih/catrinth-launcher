@@ -113,6 +113,7 @@ pub struct LibraryDownloads {
 pub struct Rule {
     pub action: String,
     pub os: Option<RuleOs>,
+    pub features: Option<HashMap<String, bool>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -182,10 +183,33 @@ pub fn is_allowed_by_rules(rules: Option<&[Rule]>) -> bool {
     let os_name = current_os_name();
     let mut allowed = false;
     for rule in rules {
-        let matches = match &rule.os {
-            Some(rule_os) => rule_os.name.as_deref() == Some(os_name),
-            None => true,
-        };
+        let mut matches = true;
+
+        if let Some(ref rule_os) = rule.os {
+            if rule_os.name.as_deref() != Some(os_name) {
+                matches = false;
+            }
+        }
+
+        if let Some(ref feats) = rule.features {
+            for (feat, &expected) in feats {
+                let actual = match feat.as_str() {
+                    "has_custom_resolution" => true,
+                    // Quick play features and demo mode are disabled for regular launch
+                    "is_demo_user" => false,
+                    "has_quick_plays_support" => false,
+                    "is_quick_play_singleplayer" => false,
+                    "is_quick_play_multiplayer" => false,
+                    "is_quick_play_realms" => false,
+                    _ => false,
+                };
+                if actual != expected {
+                    matches = false;
+                    break;
+                }
+            }
+        }
+
         if matches {
             allowed = rule.action == "allow";
         }
