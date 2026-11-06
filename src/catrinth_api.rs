@@ -132,18 +132,43 @@ impl CatrinthClient {
             format!("{}{}", self.base_url, download_url)
         };
 
-        let mut resp = self.client.get(&full_url).send()
-            .map_err(|e| format!("Ошибка скачивания файла {}: {}", full_url, e))?;
+        // Fast-track: resolve direct official CDN URL to bypass proxy/relay bottlenecks
+        let direct_url = if let Some(idx) = full_url.find("/proxy/cdn/") {
+            Some(format!("https://cdn.modrinth.com/{}", full_url[idx + "/proxy/cdn/".len()..].trim_start_matches('/')))
+        } else if let Some(idx) = full_url.find("/cdn/") {
+            Some(format!("https://cdn.modrinth.com/{}", full_url[idx + "/cdn/".len()..].trim_start_matches('/')))
+        } else if let Some(idx) = full_url.find("/data/") {
+            Some(format!("https://cdn.modrinth.com/data/{}", full_url[idx + "/data/".len()..].trim_start_matches('/')))
+        } else {
+            None
+        };
 
-        if !resp.status().is_success() {
-            return Err(format!("Не удалось скачать: HTTP {}", resp.status()));
+        let mut target_resp = None;
+        if let Some(ref direct) = direct_url {
+            if let Ok(resp) = self.client.get(direct).send() {
+                if resp.status().is_success() {
+                    target_resp = Some(resp);
+                }
+            }
         }
+
+        let mut resp = match target_resp {
+            Some(r) => r,
+            None => {
+                let r = self.client.get(&full_url).send()
+                    .map_err(|e| format!("Ошибка скачивания файла {}: {}", full_url, e))?;
+                if !r.status().is_success() {
+                    return Err(format!("Не удалось скачать: HTTP {}", r.status()));
+                }
+                r
+            }
+        };
 
         let mut file = File::create(target_path)
             .map_err(|e| format!("Ошибка создания файла: {}", e))?;
 
         let mut downloaded_bytes = 0u64;
-        let mut buffer = [0u8; 16384];
+        let mut buffer = [0u8; 262144]; // 256 KB chunk buffer
         loop {
             use std::io::Read;
             let read_bytes = resp.read(&mut buffer)
