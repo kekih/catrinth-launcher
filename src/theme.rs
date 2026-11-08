@@ -1,40 +1,40 @@
 use egui::{Color32, Margin, Rounding, Stroke, Style, Visuals};
 
 // ============================================================================
-// MODRINTH APP (THESEUS) MODERN DARK THEME PALETTE
+// MODRINTH APP (THESEUS) MODERN DARK THEME PALETTE - HIGH CONTRAST & READABLE
 // ============================================================================
 
 // Backgrounds & Surfaces
-pub const COLOR_BG_MAIN: Color32 = Color32::from_rgb(17, 18, 22);       // #111216 (Deep Slate)
-pub const COLOR_BG_SIDEBAR: Color32 = Color32::from_rgb(13, 14, 17);    // #0d0e11 (Dark Sidebar)
-pub const COLOR_BG_CARD: Color32 = Color32::from_rgb(23, 25, 32);       // #171920 (Modrinth Card)
-pub const COLOR_BG_SURFACE: Color32 = Color32::from_rgb(30, 33, 43);    // #1e212b (Elevated surface)
-pub const COLOR_BG_HOVER: Color32 = Color32::from_rgb(36, 40, 52);      // #242834 (Hover fill)
-pub const COLOR_BG_INPUT: Color32 = Color32::from_rgb(19, 20, 26);      // #13141a (Input bg)
-pub const COLOR_BORDER: Color32 = Color32::from_rgb(38, 41, 54);        // #262936 (Crisp border)
-pub const COLOR_BORDER_LIGHT: Color32 = Color32::from_rgb(52, 57, 75);  // #34394b
+pub const COLOR_BG_MAIN: Color32 = Color32::from_rgb(18, 19, 24);       // #121318 (Deep Slate)
+pub const COLOR_BG_SIDEBAR: Color32 = Color32::from_rgb(14, 15, 19);    // #0e0f13 (Sidebar Dark)
+pub const COLOR_BG_CARD: Color32 = Color32::from_rgb(25, 27, 34);       // #191b22 (Card base)
+pub const COLOR_BG_SURFACE: Color32 = Color32::from_rgb(34, 37, 47);    // #22252f (Elevated surface)
+pub const COLOR_BG_HOVER: Color32 = Color32::from_rgb(42, 46, 58);      // #2a2e3a (Hover fill)
+pub const COLOR_BG_INPUT: Color32 = Color32::from_rgb(20, 22, 28);      // #14161c (Input field fill)
+pub const COLOR_BORDER: Color32 = Color32::from_rgb(46, 50, 64);        // #2e3240 (Crisp border)
+pub const COLOR_BORDER_LIGHT: Color32 = Color32::from_rgb(62, 68, 86);  // #3e4456 (Prominent border)
 
-// Modrinth Brand Accents
+// Modrinth Brand Green Accents
 pub const COLOR_PRIMARY: Color32 = Color32::from_rgb(27, 217, 106);     // #1bd96a (Modrinth Emerald)
-pub const COLOR_PRIMARY_HOVER: Color32 = Color32::from_rgb(37, 240, 120); // #25f078
-pub const COLOR_PRIMARY_DARK: Color32 = Color32::from_rgb(20, 170, 82);   // #14aa52
-pub const COLOR_PRIMARY_BG: Color32 = Color32::from_rgba_premultiplied(27, 217, 106, 25);
+pub const COLOR_PRIMARY_HOVER: Color32 = Color32::from_rgb(40, 245, 125); // #28f57d
+pub const COLOR_PRIMARY_DARK: Color32 = Color32::from_rgb(18, 165, 78);   // #12a54e
+pub const COLOR_PRIMARY_BG: Color32 = Color32::from_rgba_premultiplied(27, 217, 106, 35);
 
-// Mod Loaders & State Colors
-pub const COLOR_PURPLE: Color32 = Color32::from_rgb(168, 85, 247);      // #a855f7 (Fabric Purple)
-pub const COLOR_PURPLE_BG: Color32 = Color32::from_rgba_premultiplied(168, 85, 247, 28);
-pub const COLOR_ORANGE: Color32 = Color32::from_rgb(249, 115, 22);       // #f97316 (Forge Orange)
-pub const COLOR_ORANGE_BG: Color32 = Color32::from_rgba_premultiplied(249, 115, 22, 28);
-pub const COLOR_BLUE: Color32 = Color32::from_rgb(59, 130, 246);        // #3b82f6 (NeoForge / Info)
-pub const COLOR_BLUE_BG: Color32 = Color32::from_rgba_premultiplied(59, 130, 246, 28);
-pub const COLOR_RED: Color32 = Color32::from_rgb(239, 68, 68);          // #ef4444 (Danger / Kill)
-pub const COLOR_RED_BG: Color32 = Color32::from_rgba_premultiplied(239, 68, 68, 28);
+// Mod Loaders & Status Badges
+pub const COLOR_PURPLE: Color32 = Color32::from_rgb(175, 95, 255);      // #af5fff (Fabric Violet)
+pub const COLOR_PURPLE_BG: Color32 = Color32::from_rgba_premultiplied(175, 95, 255, 35);
+pub const COLOR_ORANGE: Color32 = Color32::from_rgb(255, 135, 30);       // #ff871e (Forge Amber)
+pub const COLOR_ORANGE_BG: Color32 = Color32::from_rgba_premultiplied(255, 135, 30, 35);
+pub const COLOR_BLUE: Color32 = Color32::from_rgb(65, 145, 255);        // #4191ff (NeoForge / Blue)
+pub const COLOR_BLUE_BG: Color32 = Color32::from_rgba_premultiplied(65, 145, 255, 35);
+pub const COLOR_RED: Color32 = Color32::from_rgb(245, 75, 75);          // #f54b4b (Danger / Stop)
+pub const COLOR_RED_BG: Color32 = Color32::from_rgba_premultiplied(245, 75, 75, 35);
 
-// Typography
-pub const COLOR_TEXT_PRIMARY: Color32 = Color32::from_rgb(255, 255, 255);
-pub const COLOR_TEXT_BODY: Color32 = Color32::from_rgb(236, 238, 242);
-pub const COLOR_TEXT_MUTED: Color32 = Color32::from_rgb(148, 155, 172);
-pub const COLOR_TEXT_SUBTLE: Color32 = Color32::from_rgb(98, 105, 122);
+// High-Contrast Typography (Crisp & Legible)
+pub const COLOR_TEXT_PRIMARY: Color32 = Color32::from_rgb(255, 255, 255); // Pure white headers
+pub const COLOR_TEXT_BODY: Color32 = Color32::from_rgb(235, 238, 245);    // Crisp white-gray labels
+pub const COLOR_TEXT_MUTED: Color32 = Color32::from_rgb(168, 176, 194);   // Highly readable secondary text
+pub const COLOR_TEXT_SUBTLE: Color32 = Color32::from_rgb(132, 140, 158);  // Hints and descriptions
 
 pub fn apply_catrinth_theme(ctx: &egui::Context) {
     let mut visuals = Visuals::dark();
@@ -63,13 +63,13 @@ pub fn apply_catrinth_theme(ctx: &egui::Context) {
     visuals.widgets.active.bg_fill = COLOR_PRIMARY_DARK;
     visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, COLOR_PRIMARY_HOVER);
     visuals.widgets.active.rounding = Rounding::same(8.0);
-    visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(10, 24, 15));
+    visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(8, 20, 12));
 
     visuals.widgets.open.bg_fill = COLOR_BG_SURFACE;
     visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, COLOR_PRIMARY);
     visuals.widgets.open.rounding = Rounding::same(8.0);
 
-    visuals.selection.bg_fill = Color32::from_rgba_premultiplied(27, 217, 106, 50);
+    visuals.selection.bg_fill = Color32::from_rgba_premultiplied(27, 217, 106, 60);
     visuals.selection.stroke = Stroke::new(1.0_f32, COLOR_PRIMARY);
 
     let mut style = Style::clone(&ctx.style());
