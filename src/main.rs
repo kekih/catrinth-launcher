@@ -15,15 +15,15 @@ use eframe::egui;
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Catrinth Launcher — Minecraft")
-            .with_inner_size([1040.0, 680.0])
-            .with_min_inner_size([840.0, 540.0])
+            .with_title("Catrinth App — Minecraft")
+            .with_inner_size([1080.0, 700.0])
+            .with_min_inner_size([880.0, 560.0])
             .with_active(true),
         ..Default::default()
     };
 
     eframe::run_native(
-        "Catrinth Launcher",
+        "Catrinth App",
         native_options,
         Box::new(|cc| {
             theme::apply_catrinth_theme(&cc.egui_ctx);
