@@ -3,6 +3,7 @@
 mod app;
 mod catrinth_api;
 mod config;
+mod icons;
 mod java_manager;
 mod launcher;
 mod mod_loaders;

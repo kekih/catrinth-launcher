@@ -70,14 +70,22 @@ impl MinecraftLauncher {
             }
         }
 
-        // Fuzzy match for forge (e.g. "1.20.1-forge-47.3.0" for "1.20.1 (Forge)")
+        // Fuzzy match for forge and neoforge (e.g. "1.20.1-forge-47.3.0" for "1.20.1 (Forge)")
         if let Ok(entries) = fs::read_dir(&versions_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
                 if name.contains(&parsed.game_version) {
-                    if (parsed.raw.contains("Forge") && (name.contains("forge") || name.contains("Forge")))
-                        || (parsed.raw.contains("Fabric") && (name.contains("fabric") || name.contains("Fabric")))
-                    {
+                    let matches_loader = if parsed.loader == crate::mod_loaders::ModLoaderType::NeoForge {
+                        name.to_lowercase().contains("neoforge")
+                    } else if parsed.loader == crate::mod_loaders::ModLoaderType::Forge {
+                        name.to_lowercase().contains("forge") && !name.to_lowercase().contains("neoforge")
+                    } else if parsed.loader == crate::mod_loaders::ModLoaderType::Fabric {
+                        name.to_lowercase().contains("fabric")
+                    } else {
+                        false
+                    };
+
+                    if matches_loader {
                         let json = entry.path().join(format!("{}.json", name));
                         if json.exists() {
                             return true;
@@ -139,9 +147,17 @@ impl MinecraftLauncher {
                 for entry in entries.flatten() {
                     let name = entry.file_name().to_string_lossy().to_string();
                     if name.contains(&parsed.game_version) {
-                        if (parsed.raw.contains("Forge") && (name.contains("forge") || name.contains("Forge")))
-                            || (parsed.raw.contains("Fabric") && (name.contains("fabric") || name.contains("Fabric")))
-                        {
+                        let matches_loader = if parsed.loader == crate::mod_loaders::ModLoaderType::NeoForge {
+                            name.to_lowercase().contains("neoforge")
+                        } else if parsed.loader == crate::mod_loaders::ModLoaderType::Forge {
+                            name.to_lowercase().contains("forge") && !name.to_lowercase().contains("neoforge")
+                        } else if parsed.loader == crate::mod_loaders::ModLoaderType::Fabric {
+                            name.to_lowercase().contains("fabric")
+                        } else {
+                            false
+                        };
+
+                        if matches_loader {
                             let candidate_json = entry.path().join(format!("{}.json", name));
                             if candidate_json.exists() {
                                 target_dir = entry.path();

@@ -1,5 +1,6 @@
 use crate::catrinth_api::{CatrinthClient, ModHit};
 use crate::config::LauncherConfig;
+use crate::icons::{paint_vector_icon, VectorIcon};
 use crate::java_manager::{JavaManager, ALL_TEMURIN_VERSIONS};
 use crate::launcher::{InstalledMod, MinecraftLauncher};
 use crate::mod_loaders::{self, get_default_versions, ModLoaderType, ParsedVersion};
@@ -12,7 +13,7 @@ use crate::theme::{
     COLOR_TEXT_MUTED, COLOR_TEXT_PRIMARY, COLOR_TEXT_SUBTLE,
 };
 use eframe::egui;
-use egui::{vec2, Align, Color32, Layout, Margin, RichText, Rounding, Stroke, Ui};
+use egui::{vec2, Align, Color32, Layout, Margin, Pos2, RichText, Rounding, Stroke, Ui};
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
@@ -131,8 +132,27 @@ impl CatrinthApp {
             if v.version_type == "release"
                 || (self.show_snapshots && v.version_type == "snapshot")
             {
-                let v_name = format!("{} (Vanilla)", v.id);
-                if !list.contains(&v_name) && !list.contains(&v.id) {
+                let base = &v.id;
+                if mod_loaders::is_fabric_supported(base) {
+                    let f_name = format!("{} (Fabric)", base);
+                    if !list.contains(&f_name) {
+                        list.push(f_name);
+                    }
+                }
+                if mod_loaders::is_neoforge_supported(base) {
+                    let nf_name = format!("{} (NeoForge)", base);
+                    if !list.contains(&nf_name) {
+                        list.push(nf_name);
+                    }
+                }
+                if mod_loaders::is_forge_supported(base) {
+                    let fg_name = format!("{} (Forge)", base);
+                    if !list.contains(&fg_name) {
+                        list.push(fg_name);
+                    }
+                }
+                let v_name = format!("{} (Vanilla)", base);
+                if !list.contains(&v_name) && !list.contains(base) {
                     list.push(v_name);
                 }
             }
@@ -297,7 +317,26 @@ impl CatrinthApp {
                 }
             }
 
-            // 7. Forge loader installation if Forge selected
+            // 7. NeoForge loader installation if NeoForge selected
+            if parsed.loader == ModLoaderType::NeoForge {
+                if let Some(bin) = JavaManager::find_best_java_for_minecraft(&config_clone.java_path, &parsed.game_version) {
+                    if let Err(e) = mod_loaders::install_neoforge(&parsed.game_version, &config_clone.game_dir, &bin, Arc::clone(&progress_arc)) {
+                        let mut p = progress_arc.lock().unwrap();
+                        p.error = Some(format!("Ошибка установки NeoForge: {}", e));
+                        p.is_done = true;
+                        ctx.request_repaint();
+                        return;
+                    }
+                } else {
+                    let mut p = progress_arc.lock().unwrap();
+                    p.error = Some("Для установки NeoForge необходима Java! Перейдите во вкладку «Среда Java» и установите Java 21.".to_string());
+                    p.is_done = true;
+                    ctx.request_repaint();
+                    return;
+                }
+            }
+
+            // 8. Forge loader installation if Forge selected
             if parsed.loader == ModLoaderType::Forge {
                 if let Some(bin) = JavaManager::find_best_java_for_minecraft(&config_clone.java_path, &parsed.game_version) {
                     if let Err(e) = mod_loaders::install_forge(&parsed.game_version, &config_clone.game_dir, &bin, Arc::clone(&progress_arc)) {
@@ -509,29 +548,29 @@ impl eframe::App for CatrinthApp {
                 ui.vertical(|ui| {
                     ui.set_width(ui.available_width());
 
-                    sidebar_pill_button(ui, "▶", "Главная / Играть", None, self.active_tab == Tab::Play, || {
+                    sidebar_pill_button(ui, VectorIcon::Play, "Главная / Играть", None, self.active_tab == Tab::Play, || {
                         self.active_tab = Tab::Play;
                     });
 
                     ui.add_space(4.0);
-                    sidebar_pill_button(ui, "⊞", "Каталог модов", None, self.active_tab == Tab::ModsCatalog, || {
+                    sidebar_pill_button(ui, VectorIcon::Grid, "Каталог модов", None, self.active_tab == Tab::ModsCatalog, || {
                         self.active_tab = Tab::ModsCatalog;
                     });
 
                     ui.add_space(4.0);
                     let count_badge = format!("{}", self.installed_mods.len());
-                    sidebar_pill_button(ui, "▦", "Моды игры", Some(&count_badge), self.active_tab == Tab::InstalledMods, || {
+                    sidebar_pill_button(ui, VectorIcon::Mods, "Моды игры", Some(&count_badge), self.active_tab == Tab::InstalledMods, || {
                         self.active_tab = Tab::InstalledMods;
                         self.refresh_installed_mods();
                     });
 
                     ui.add_space(4.0);
-                    sidebar_pill_button(ui, "☕", "Среда Java", None, self.active_tab == Tab::JavaRuntimes, || {
+                    sidebar_pill_button(ui, VectorIcon::Coffee, "Среда Java", None, self.active_tab == Tab::JavaRuntimes, || {
                         self.active_tab = Tab::JavaRuntimes;
                     });
 
                     ui.add_space(4.0);
-                    sidebar_pill_button(ui, "⚙", "Настройки", None, self.active_tab == Tab::Settings, || {
+                    sidebar_pill_button(ui, VectorIcon::Gear, "Настройки", None, self.active_tab == Tab::Settings, || {
                         self.active_tab = Tab::Settings;
                     });
                 });
@@ -615,10 +654,10 @@ impl eframe::App for CatrinthApp {
     }
 }
 
-// Custom modern sidebar pill button
+// Custom modern sidebar pill button with vector icon
 fn sidebar_pill_button(
     ui: &mut Ui,
-    icon: &str,
+    icon: VectorIcon,
     label: &str,
     badge: Option<&str>,
     active: bool,
@@ -657,7 +696,8 @@ fn sidebar_pill_button(
     let content_rect = rect.shrink2(vec2(14.0, 0.0));
     ui.allocate_ui_at_rect(content_rect, |ui| {
         ui.horizontal_centered(|ui| {
-            ui.label(RichText::new(icon).color(text_color).size(15.0).strong());
+            let (icon_rect, _) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::hover());
+            paint_vector_icon(ui.painter(), icon, icon_rect, text_color);
             ui.add_space(8.0);
             ui.label(
                 RichText::new(label)
@@ -691,17 +731,91 @@ fn render_badge(ui: &mut Ui, text: &str, dot_color: Option<Color32>, bg: Color32
     egui::Frame::none()
         .fill(bg)
         .rounding(Rounding::same(6.0))
-        .inner_margin(Margin::symmetric(8.0, 4.0))
+        .inner_margin(Margin::symmetric(10.0, 5.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 if let Some(col) = dot_color {
                     let (dot_rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), egui::Sense::hover());
                     ui.painter().circle_filled(dot_rect.center(), 3.5, col);
-                    ui.add_space(2.0);
+                    ui.add_space(3.0);
                 }
-                ui.label(RichText::new(text).color(text_color).size(11.5).strong());
+                ui.label(RichText::new(text).color(text_color).size(12.0).strong());
             });
         });
+}
+
+// Modern mod loader filter chip with custom colored vector dot
+fn render_loader_chip(
+    ui: &mut Ui,
+    label: &str,
+    dot_color: Option<Color32>,
+    active: bool,
+) -> egui::Response {
+    let height = 32.0;
+    let padding_x = 14.0;
+    let font_id = egui::FontId::proportional(13.0);
+    let galley = ui.painter().layout_no_wrap(
+        label.to_string(),
+        font_id.clone(),
+        if active {
+            Color32::from_rgb(8, 20, 12)
+        } else {
+            COLOR_TEXT_BODY
+        },
+    );
+    let dot_space = if dot_color.is_some() { 14.0 } else { 0.0 };
+    let total_width = padding_x * 2.0 + dot_space + galley.size().x;
+
+    let (rect, resp) = ui.allocate_exact_size(vec2(total_width, height), egui::Sense::click());
+
+    let (bg, stroke, text_color) = if active {
+        (
+            COLOR_PRIMARY,
+            Stroke::new(1.0_f32, COLOR_PRIMARY),
+            Color32::from_rgb(8, 20, 12),
+        )
+    } else if resp.hovered() {
+        (
+            COLOR_BG_HOVER,
+            Stroke::new(1.0_f32, COLOR_PRIMARY),
+            COLOR_TEXT_PRIMARY,
+        )
+    } else {
+        (
+            COLOR_BG_SURFACE,
+            Stroke::new(1.0_f32, COLOR_BORDER),
+            COLOR_TEXT_BODY,
+        )
+    };
+
+    ui.painter().rect_filled(rect, Rounding::same(6.0), bg);
+    ui.painter().rect_stroke(rect, Rounding::same(6.0), stroke);
+
+    let mut start_x = rect.min.x + padding_x;
+    if let Some(col) = dot_color {
+        let dot_center = Pos2::new(start_x + 3.5, rect.center().y);
+        ui.painter().circle_filled(
+            dot_center,
+            3.5,
+            if active {
+                Color32::from_rgb(8, 20, 12)
+            } else {
+                col
+            },
+        );
+        start_x += 14.0;
+    }
+
+    let text_pos = Pos2::new(start_x, rect.center().y - galley.size().y / 2.0);
+    ui.painter().text(
+        text_pos,
+        egui::Align2::LEFT_TOP,
+        label,
+        font_id,
+        text_color,
+    );
+
+    resp
 }
 
 impl CatrinthApp {
@@ -726,17 +840,12 @@ impl CatrinthApp {
             .inner_margin(Margin::same(24.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    // Modern stylized "MC" instance tile (always sharp)
-                    let (icon_rect, _) = ui.allocate_exact_size(vec2(54.0, 54.0), egui::Sense::hover());
+                    // Modern stylized Pickaxe instance tile (always sharp)
+                    let (icon_rect, _) = ui.allocate_exact_size(vec2(56.0, 56.0), egui::Sense::hover());
                     ui.painter().rect_filled(icon_rect, Rounding::same(10.0), COLOR_BG_SURFACE);
                     ui.painter().rect_stroke(icon_rect, Rounding::same(10.0), Stroke::new(1.0, COLOR_BORDER_LIGHT));
-                    ui.painter().text(
-                        icon_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "MC",
-                        egui::FontId::proportional(22.0),
-                        COLOR_PRIMARY,
-                    );
+                    let pickaxe_rect = icon_rect.shrink(10.0);
+                    paint_vector_icon(ui.painter(), VectorIcon::Pickaxe, pickaxe_rect, COLOR_PRIMARY);
 
                     ui.add_space(14.0);
 
@@ -750,12 +859,15 @@ impl CatrinthApp {
                                     .strong(),
                             );
 
-                            ui.add_space(4.0);
+                            ui.add_space(6.0);
 
                             // Mod Loader Pill Badge
                             match parsed.loader {
                                 ModLoaderType::Fabric => {
                                     render_badge(ui, "FABRIC", Some(COLOR_PURPLE), COLOR_PURPLE_BG, COLOR_PURPLE);
+                                }
+                                ModLoaderType::NeoForge => {
+                                    render_badge(ui, "NEOFORGE", Some(COLOR_BLUE), COLOR_BLUE_BG, COLOR_BLUE);
                                 }
                                 ModLoaderType::Forge => {
                                     render_badge(ui, "FORGE", Some(COLOR_ORANGE), COLOR_ORANGE_BG, COLOR_ORANGE);
@@ -971,241 +1083,236 @@ impl CatrinthApp {
         ui.add_space(20.0);
 
         // ====================================================================
-        // MODERN 2-COLUMN DASHBOARD (Guaranteed Vertical Flow in Each Column)
+        // CARD 1: КОНФИГУРАЦИЯ ЗАПУСКА MINECRAFT (ПОЛНАЯ ШИРИНА, БЕЗ СРЕЗАНИЙ)
         // ====================================================================
-        ui.columns(2, |columns| {
-            // ----------------------------------------------------------------
-            // COLUMN 1: КАРТОЧКА «КОНФИГУРАЦИЯ ЗАПУСКА»
-            // ----------------------------------------------------------------
-            egui::Frame::none()
-                .fill(COLOR_BG_CARD)
-                .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
-                .rounding(Rounding::same(12.0))
-                .inner_margin(Margin::same(20.0))
-                .show(&mut columns[0], |ui| {
-                    ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new("Конфигурация запуска")
-                                .color(COLOR_TEXT_PRIMARY)
-                                .size(16.5)
-                                .strong(),
-                        );
+        egui::Frame::none()
+            .fill(COLOR_BG_CARD)
+            .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
+            .rounding(Rounding::same(12.0))
+            .inner_margin(Margin::same(22.0))
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new("Конфигурация запуска")
+                            .color(COLOR_TEXT_PRIMARY)
+                            .size(17.0)
+                            .strong(),
+                    );
+                    ui.add_space(14.0);
 
-                        ui.add_space(14.0);
+                    // 1. Nickname
+                    ui.label(RichText::new("Никнейм игрока:").color(COLOR_TEXT_BODY).size(13.5).strong());
+                    ui.add_space(4.0);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.config.username)
+                            .desired_width(320.0)
+                            .hint_text("Ваш ник в игре"),
+                    );
 
-                        // Username Input
-                        ui.label(RichText::new("Никнейм игрока:").color(COLOR_TEXT_BODY).size(13.0).strong());
-                        ui.add_space(4.0);
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.config.username)
-                                .desired_width(ui.available_width())
-                                .hint_text("Ваш ник в игре"),
-                        );
+                    ui.add_space(16.0);
 
-                        ui.add_space(14.0);
-
-                        // Loader Selector Chips
-                        ui.label(RichText::new("Загрузчик модов:").color(COLOR_TEXT_BODY).size(13.0).strong());
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            for (filter, label, dot_color) in [
-                                (ModLoaderType::All, "Все", None),
-                                (ModLoaderType::Fabric, "Fabric", Some(COLOR_PURPLE)),
-                                (ModLoaderType::Forge, "Forge", Some(COLOR_ORANGE)),
-                                (ModLoaderType::Vanilla, "Vanilla", Some(COLOR_PRIMARY)),
-                            ] {
-                                let is_active = self.loader_filter == filter;
-                                let (bg, stroke, text_color) = if is_active {
-                                    (COLOR_PRIMARY, Stroke::new(1.0_f32, COLOR_PRIMARY), Color32::from_rgb(8, 20, 12))
-                                } else {
-                                    (COLOR_BG_SURFACE, Stroke::new(1.0_f32, COLOR_BORDER), COLOR_TEXT_BODY)
-                                };
-
-                                let btn = egui::Button::new(
-                                    RichText::new(label)
-                                        .color(text_color)
-                                        .size(12.5)
-                                        .strong(),
-                                )
-                                .fill(bg)
-                                .stroke(stroke)
-                                .rounding(Rounding::same(6.0));
-
-                                if ui.add(btn).clicked() {
-                                    self.loader_filter = filter;
-                                }
+                    // 2. Mod Loader Filter Chips (Все, Fabric, NeoForge, Forge, Vanilla)
+                    ui.label(RichText::new("Загрузчик модов:").color(COLOR_TEXT_BODY).size(13.5).strong());
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        for (filter, label, dot_color) in [
+                            (ModLoaderType::All, "Все", None),
+                            (ModLoaderType::Fabric, "Fabric", Some(COLOR_PURPLE)),
+                            (ModLoaderType::NeoForge, "NeoForge", Some(COLOR_BLUE)),
+                            (ModLoaderType::Forge, "Forge", Some(COLOR_ORANGE)),
+                            (ModLoaderType::Vanilla, "Vanilla", Some(COLOR_PRIMARY)),
+                        ] {
+                            let is_active = self.loader_filter == filter;
+                            if render_loader_chip(ui, label, dot_color, is_active).clicked() {
+                                self.loader_filter = filter;
                             }
-                        });
-
-                        ui.add_space(14.0);
-
-                        // Version Selection Dropdown
-                        ui.label(RichText::new("Версия Minecraft:").color(COLOR_TEXT_BODY).size(13.0).strong());
-                        ui.add_space(4.0);
-                        egui::ComboBox::from_id_source("version_combobox_main")
-                            .selected_text(&self.config.selected_version)
-                            .width(ui.available_width() - 8.0)
-                            .show_ui(ui, |ui| {
-                                let filtered: Vec<String> = self
-                                    .available_versions
-                                    .iter()
-                                    .filter(|v| {
-                                        let p = ParsedVersion::parse(v);
-                                        match self.loader_filter {
-                                            ModLoaderType::All => true,
-                                            ModLoaderType::Fabric => p.loader == ModLoaderType::Fabric,
-                                            ModLoaderType::Forge => p.loader == ModLoaderType::Forge,
-                                            ModLoaderType::Vanilla => p.loader == ModLoaderType::Vanilla,
-                                        }
-                                    })
-                                    .cloned()
-                                    .collect();
-
-                                for v in &filtered {
-                                    let tag = if MinecraftLauncher::is_version_installed(&self.config, v) {
-                                        "  [Готова]"
-                                    } else {
-                                        "  [Скачать]"
-                                    };
-                                    ui.selectable_value(
-                                        &mut self.config.selected_version,
-                                        v.clone(),
-                                        format!("{}{}", v, tag),
-                                    );
-                                }
-                            });
-
-                        ui.add_space(10.0);
-                        ui.checkbox(&mut self.show_snapshots, "Показывать экспериментальные снапшоты");
+                            ui.add_space(6.0);
+                        }
                     });
-                });
 
-            // ----------------------------------------------------------------
-            // COLUMN 2: КАРТОЧКА «РЕСУРСЫ И СРЕДА»
-            // ----------------------------------------------------------------
-            egui::Frame::none()
-                .fill(COLOR_BG_CARD)
-                .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
-                .rounding(Rounding::same(12.0))
-                .inner_margin(Margin::same(20.0))
-                .show(&mut columns[1], |ui| {
-                    ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new("Ресурсы и среда")
+                    ui.add_space(16.0);
+
+                    // 3. Minecraft Version Selector Dropdown
+                    ui.label(RichText::new("Версия Minecraft:").color(COLOR_TEXT_BODY).size(13.5).strong());
+                    ui.add_space(4.0);
+                    egui::ComboBox::from_id_source("version_combobox_main")
+                        .selected_text(
+                            RichText::new(&self.config.selected_version)
                                 .color(COLOR_TEXT_PRIMARY)
-                                .size(16.5)
+                                .size(13.5)
                                 .strong(),
-                        );
+                        )
+                        .width(480.0)
+                        .show_ui(ui, |ui| {
+                            let filtered: Vec<String> = self
+                                .available_versions
+                                .iter()
+                                .filter(|v| {
+                                    let p = ParsedVersion::parse(v);
+                                    match self.loader_filter {
+                                        ModLoaderType::All => true,
+                                        ModLoaderType::Fabric => p.loader == ModLoaderType::Fabric,
+                                        ModLoaderType::NeoForge => p.loader == ModLoaderType::NeoForge,
+                                        ModLoaderType::Forge => p.loader == ModLoaderType::Forge,
+                                        ModLoaderType::Vanilla => p.loader == ModLoaderType::Vanilla,
+                                    }
+                                })
+                                .cloned()
+                                .collect();
 
-                        ui.add_space(14.0);
-
-                        // RAM Allocation Header
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("Оперативная память (ОЗУ):").color(COLOR_TEXT_BODY).size(13.0).strong());
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                let gb = self.config.ram_max_mb as f32 / 1024.0;
-                                ui.label(
-                                    RichText::new(format!("{:.1} GB ({} MB)", gb, self.config.ram_max_mb))
-                                        .color(COLOR_PRIMARY)
-                                        .size(13.5)
-                                        .strong(),
-                                );
-                            });
-                        });
-
-                        ui.add_space(6.0);
-                        // RAM Preset Buttons
-                        ui.horizontal(|ui| {
-                            for gb in [2, 4, 6, 8, 12, 16] {
-                                let mb = gb * 1024;
-                                let is_active = self.config.ram_max_mb == mb;
-                                let (bg, text_color) = if is_active {
-                                    (COLOR_PRIMARY, Color32::from_rgb(8, 20, 12))
+                            for v in &filtered {
+                                let tag = if MinecraftLauncher::is_version_installed(&self.config, v) {
+                                    "  [Готова]"
                                 } else {
-                                    (COLOR_BG_SURFACE, COLOR_TEXT_BODY)
+                                    "  [Скачать]"
                                 };
-
-                                let btn = egui::Button::new(
-                                    RichText::new(format!("{}G", gb))
-                                        .color(text_color)
-                                        .size(12.0)
-                                        .strong(),
-                                )
-                                .fill(bg)
-                                .rounding(Rounding::same(6.0));
-
-                                if ui.add(btn).clicked() {
-                                    self.config.ram_max_mb = mb;
-                                }
+                                let p = ParsedVersion::parse(v);
+                                let col = match p.loader {
+                                    ModLoaderType::Fabric => COLOR_PURPLE,
+                                    ModLoaderType::NeoForge => COLOR_BLUE,
+                                    ModLoaderType::Forge => COLOR_ORANGE,
+                                    _ => COLOR_TEXT_PRIMARY,
+                                };
+                                ui.selectable_value(
+                                    &mut self.config.selected_version,
+                                    v.clone(),
+                                    RichText::new(format!("{}{}", v, tag))
+                                        .color(col)
+                                        .size(13.0),
+                                );
                             }
                         });
 
-                        ui.add_space(8.0);
-                        ui.add(
-                            egui::Slider::new(&mut self.config.ram_max_mb, 1024..=32768)
-                                .step_by(512.0)
-                                .show_value(false),
+                    ui.add_space(12.0);
+                    ui.checkbox(&mut self.show_snapshots, "Показывать экспериментальные снапшоты");
+                });
+            });
+
+        ui.add_space(16.0);
+
+        // ====================================================================
+        // CARD 2: ВЫДЕЛЕНИЕ ПАМЯТИ (ОЗУ) И СРЕДА JAVA
+        // ====================================================================
+        egui::Frame::none()
+            .fill(COLOR_BG_CARD)
+            .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
+            .rounding(Rounding::same(12.0))
+            .inner_margin(Margin::same(22.0))
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new("Ресурсы и среда выполнения")
+                            .color(COLOR_TEXT_PRIMARY)
+                            .size(17.0)
+                            .strong(),
+                    );
+                    ui.add_space(14.0);
+
+                    // RAM Allocation Header
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Оперативная память (ОЗУ):").color(COLOR_TEXT_BODY).size(13.5).strong());
+                        let gb = self.config.ram_max_mb as f32 / 1024.0;
+                        ui.label(
+                            RichText::new(format!("{:.1} GB ({} MB)", gb, self.config.ram_max_mb))
+                                .color(COLOR_PRIMARY)
+                                .size(13.5)
+                                .strong(),
                         );
+                    });
 
-                        ui.add_space(16.0);
+                    ui.add_space(8.0);
+                    // RAM Preset Buttons
+                    ui.horizontal(|ui| {
+                        for gb in [2, 4, 6, 8, 12, 16] {
+                            let mb = gb * 1024;
+                            let is_active = self.config.ram_max_mb == mb;
+                            let (bg, text_color) = if is_active {
+                                (COLOR_PRIMARY, Color32::from_rgb(8, 20, 12))
+                            } else {
+                                (COLOR_BG_SURFACE, COLOR_TEXT_BODY)
+                            };
 
-                        // Java Environment Card
-                        ui.label(RichText::new("Среда выполнения Java:").color(COLOR_TEXT_BODY).size(13.0).strong());
-                        ui.add_space(4.0);
+                            let btn = egui::Button::new(
+                                RichText::new(format!("{} GB", gb))
+                                    .color(text_color)
+                                    .size(12.5)
+                                    .strong(),
+                            )
+                            .fill(bg)
+                            .rounding(Rounding::same(6.0));
 
-                        let java_disp = if self.config.java_path.is_empty() {
-                            "Автоматический выбор (Temurin / PATH)".to_string()
-                        } else {
-                            let p = PathBuf::from(&self.config.java_path);
-                            p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| self.config.java_path.clone())
-                        };
+                            if ui.add(btn).clicked() {
+                                self.config.ram_max_mb = mb;
+                            }
+                            ui.add_space(4.0);
+                        }
+                    });
 
-                        egui::Frame::none()
-                            .fill(COLOR_BG_SURFACE)
-                            .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
-                            .rounding(Rounding::same(8.0))
-                            .inner_margin(Margin::same(10.0))
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new(&java_disp).color(COLOR_TEXT_PRIMARY).size(12.5).strong());
-                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        if ui.add(
-                                            egui::Button::new(
-                                                RichText::new("Настроить Java →")
-                                                    .color(COLOR_PRIMARY)
-                                                    .size(12.0)
-                                                    .strong(),
-                                            )
-                                            .fill(COLOR_PRIMARY_BG)
-                                            .stroke(Stroke::new(1.0_f32, COLOR_PRIMARY))
-                                            .rounding(Rounding::same(6.0)),
-                                        ).clicked() {
-                                            self.active_tab = Tab::JavaRuntimes;
-                                        }
-                                    });
+                    ui.add_space(10.0);
+                    ui.add(
+                        egui::Slider::new(&mut self.config.ram_max_mb, 1024..=32768)
+                            .step_by(512.0)
+                            .show_value(false),
+                    );
+
+                    ui.add_space(18.0);
+
+                    // Java Environment Card
+                    ui.label(RichText::new("Среда выполнения Java:").color(COLOR_TEXT_BODY).size(13.5).strong());
+                    ui.add_space(4.0);
+
+                    let java_disp = if self.config.java_path.is_empty() {
+                        "Автоматический выбор (Eclipse Temurin / PATH)".to_string()
+                    } else {
+                        let p = PathBuf::from(&self.config.java_path);
+                        p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| self.config.java_path.clone())
+                    };
+
+                    egui::Frame::none()
+                        .fill(COLOR_BG_SURFACE)
+                        .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
+                        .rounding(Rounding::same(8.0))
+                        .inner_margin(Margin::same(12.0))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(&java_disp).color(COLOR_TEXT_PRIMARY).size(13.0).strong());
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    if ui.add(
+                                        egui::Button::new(
+                                            RichText::new("Управление Java →")
+                                                .color(COLOR_PRIMARY)
+                                                .size(12.5)
+                                                .strong(),
+                                        )
+                                        .fill(COLOR_PRIMARY_BG)
+                                        .stroke(Stroke::new(1.0_f32, COLOR_PRIMARY))
+                                        .rounding(Rounding::same(6.0)),
+                                    ).clicked() {
+                                        self.active_tab = Tab::JavaRuntimes;
+                                    }
                                 });
                             });
+                        });
 
-                        ui.add_space(16.0);
+                    ui.add_space(16.0);
 
-                        // Game Directory
-                        ui.label(RichText::new("Папка игры:").color(COLOR_TEXT_BODY).size(13.0).strong());
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(&self.config.game_dir).color(COLOR_TEXT_MUTED).size(11.5));
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui.add(
-                                    egui::Button::new("Открыть")
-                                        .fill(COLOR_BG_SURFACE)
-                                        .rounding(Rounding::same(6.0)),
-                                ).clicked() {
-                                    let _ = open::that(&self.config.game_dir);
-                                }
-                            });
+                    // Game Directory
+                    ui.label(RichText::new("Папка игры:").color(COLOR_TEXT_BODY).size(13.5).strong());
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&self.config.game_dir).color(COLOR_TEXT_MUTED).size(12.0));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add(
+                                egui::Button::new("Открыть папку")
+                                    .fill(COLOR_BG_SURFACE)
+                                    .rounding(Rounding::same(6.0)),
+                            ).clicked() {
+                                let _ = open::that(&self.config.game_dir);
+                            }
                         });
                     });
                 });
-        });
+            });
     }
 
     // ------------------------------------------------------------------------
